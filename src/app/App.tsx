@@ -477,7 +477,7 @@ export default function App() {
       </header>
       <input ref={fileIn} type="file" accept=".json,application/json" hidden onChange={onFile} />
 
-      <LayersPanel ver={ver} toast={toastMsg} />
+      <LayersPanel ver={ver} toast={toastMsg} onPage={(id) => { if (mode() === 'play') viewer?.overview(900, id); else design.fit(); }} />
       <SceneOutline ver={ver} open={outline()} close={() => setOutline(false)} focus={focusNode} showJourney={(id) => store.setJourney(id)} />
       <JourneysPanel ver={ver} toast={toastMsg} play={playJourney} playing={jPlaying} stopPlay={stopJourneyPlay} />
       <Show when={journeyOn()}>

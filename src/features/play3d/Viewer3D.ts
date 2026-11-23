@@ -4,13 +4,16 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import type { Store } from '../../shared/model/store';
 import { isNodeId, Journey, KINDS, NodeKind, SNode, Stop, uid } from '../../shared/model/types';
 import { journeyEdges, journeyNodes, tokenAt } from '../journeys/journeys';
-import { FLOOR_GAP, layerLevels, layerShifts, pagePlacements, pagesOf, PagePlacement, WORLD_SCALE } from '../../shared/model/pages';
+import { FLOOR_GAP, layerLevels, layerPages, layerShifts, pagePlacements, pagesOf, PagePlacement, WORLD_SCALE } from '../../shared/model/pages';
 import { Simulation, SimResult } from '../simulation/sim';
 import type { View2D } from '../design/DesignCanvas';
 
 /** World px → 3D units. */
 export const S = WORLD_SCALE;
 const LAYER_GAP = FLOOR_GAP; // world px between floors
+const GROUND_Y = -0.3;
+const TILE_H = 0.2;
+const TILE_Y = -0.02 - TILE_H / 2; // top face at -0.02
 const SEG = 24; // samples per edge curve
 const MAX_PARTICLES = 30000;
 const SLOTS = 60; // particle slots per edge
@@ -163,6 +166,9 @@ export class Viewer3D {
   private slabEdges = new THREE.EdgesGeometry(this.slabGeo);
   private slabMat = new THREE.MeshStandardMaterial({ color: '#8fb3ff', transparent: true, opacity: 0.06, depthWrite: false });
   private slabLineMat = new THREE.LineBasicMaterial({ color: '#4a5d85', transparent: true, opacity: 0.6 });
+  /** Page tiles: opaque, a shade lighter than the ground, so each page reads as its own lot at any zoom. */
+  private tileMat = new THREE.MeshStandardMaterial({ color: '#161c28', roughness: 1 });
+  private tileLineMat = new THREE.LineBasicMaterial({ color: '#3a4560' });
   private edgeGeos: EdgeGeo[] = [];
   private edgeGeoById = new Map<string, EdgeGeo>();
   /** Journey on screen, resolved once per rebuild. */
@@ -228,11 +234,14 @@ export class Viewer3D {
 
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1 }));
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.02;
+    // the ground sits well below everything else (page tiles, boxes): surfaces a few hundredths apart
+    // z-fight once the camera is far away, which made page tiles vanish when zooming out
+    ground.position.y = GROUND_Y;
     ground.receiveShadow = true;
     const grid = new THREE.GridHelper(3000, 1500, '#252c3a', '#171c26');
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.7;
+    grid.position.y = GROUND_Y + 0.01;
     this.scene.add(ground, grid);
 
     for (const k of MESH_KINDS) {
@@ -826,7 +835,18 @@ export class Viewer3D {
       slab(x0, x1, z0, z1, y - 0.06);
     }
     if (pagesOf(sc).length < 2) return;
-    for (const p of this.placements.values()) slab(p.x0 + p.dx - pad * 2, p.x1 + p.dx + pad * 2, p.y0 - pad * 2, p.y1 + pad * 2, -0.03);
+    for (const p of this.placements.values()) {
+      const x0 = p.x0 + p.dx - pad * 2, x1 = p.x1 + p.dx + pad * 2, z0 = p.y0 - pad * 2, z1 = p.y1 + pad * 2;
+      const tile = new THREE.Mesh(this.slabGeo, this.tileMat);
+      const line = new THREE.LineSegments(this.slabEdges, this.tileLineMat);
+      tile.receiveShadow = true;
+      for (const o of [tile, line]) {
+        // top face just under the boxes (y 0), bottom well clear of the ground
+        o.position.set(((x0 + x1) / 2) * S, TILE_Y, ((z0 + z1) / 2) * S);
+        o.scale.set((x1 - x0) * S, TILE_H, (z1 - z0) * S);
+        this.slabGroup.add(o);
+      }
+    }
   }
 
   private buildSelection() {
@@ -1030,17 +1050,23 @@ export class Viewer3D {
     this.flyTo(t.clone().addScaledVector(dir, dist), t, 700);
   }
 
-  /** Fly to a 3/4 view that frames every visible node on every visible floor. */
-  overview(dur = 900) {
+  /** Fly to a 3/4 view that frames every visible node on every visible floor (of one page, if given). */
+  overview(dur = 900, page?: string) {
     if (this.dirty) this.rebuild();
     const box = new THREE.Box3();
+    const lp = page ? layerPages(this.store.scene) : null;
     for (const n of Object.values(this.store.scene.nodes)) {
       if (!this.visibleLayers.has(n.layer)) continue;
+      if (lp && lp.get(n.layer) !== page) continue;
       const base = this.nodeBase(n);
       box.expandByPoint(new THREE.Vector3(this.nx(n) * S, base, n.y * S));
       box.expandByPoint(new THREE.Vector3((this.nx(n) + n.w) * S, base + n.height * S, (n.y + n.h) * S));
     }
-    if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(10, 1, 10));
+    if (box.isEmpty()) {
+      const p = page ? this.placements.get(page) : undefined;
+      const c = p ? new THREE.Vector3(((p.x0 + p.x1) / 2 + p.dx) * S, 0, ((p.y0 + p.y1) / 2) * S) : new THREE.Vector3();
+      box.setFromCenterAndSize(c, new THREE.Vector3(10, 1, 10));
+    }
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     // distance at which the bounding sphere fits the narrower of the two fields of view, plus a margin
     const vFov = THREE.MathUtils.degToRad(this.camera.fov);

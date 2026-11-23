@@ -7,7 +7,7 @@ import { Icon } from '../../shared/ui/icons';
 // Pages are folders; each holds its own floors (top of the list = top floor in 3D).
 // The open page (the active layer's page) is the one the 2D editor shows.
 
-export function LayersPanel(props: { ver: () => number; toast: (m: string) => void }) {
+export function LayersPanel(props: { ver: () => number; toast: (m: string) => void; onPage?: (id: string) => void }) {
   const tree = createMemo(() => {
     props.ver();
     const s = store.scene;
@@ -105,7 +105,7 @@ export function LayersPanel(props: { ver: () => number; toast: (m: string) => vo
         {(t) => (
           <div class="page" classList={{ open: isOpen(t.p.id) }}>
             <div class="layer folder" classList={{ current: page() === t.p.id }}
-              title={page() === t.p.id ? 'Open in 2D' : 'Open this page in 2D'} onClick={() => store.openPage(t.p.id)}>
+              title={page() === t.p.id ? 'Show this page' : 'Open this page'} onClick={() => { store.openPage(t.p.id); props.onPage?.(t.p.id); }}>
               <button class="icon sm" title={isOpen(t.p.id) ? 'Collapse' : 'Expand'} disabled={page() === t.p.id}
                 onClick={(e) => { e.stopPropagation(); toggle(t.p.id); }}>
                 <span class="chev"><Icon name="chevron" size={14} /></span>
