@@ -32,6 +32,14 @@ const P: Record<string, () => JSX.Element> = {
   flow: () => <path d="M2 10h3M8 10h3M14 10h4m-2-2l2 2-2 2" />,
   skull: () => <><path d="M10 3a6 6 0 00-6 6c0 2 1 3.3 2 4v2.5h8V13c1-.7 2-2 2-4a6 6 0 00-6-6z" /><circle cx="7.8" cy="9.5" r="1.1" /><circle cx="12.2" cy="9.5" r="1.1" /></>,
   layers: () => <path d="M10 3l8 4-8 4-8-4zM2 11l8 4 8-4" />,
+  route: () => <><circle cx="5" cy="15" r="2" /><circle cx="15" cy="5" r="2" /><path d="M7 15h6a2.5 2.5 0 000-5H7a2.5 2.5 0 010-5h6" /></>,
+  rec: () => <circle cx="10" cy="10" r="5" fill="currentColor" stroke="none" />,
+  stop: () => <rect x="5" y="5" width="10" height="10" rx="1.5" fill="currentColor" stroke="none" />,
+  swap: () => <path d="M4 7h11m0 0l-3-3m3 3l-3 3M16 13H5m0 0l3-3m-3 3l3 3" />,
+  prev: () => <path d="M12 5l-5 5 5 5" />,
+  next: () => <path d="M8 5l5 5-5 5" />,
+  github: () => <path d="M10 2a8 8 0 00-2.5 15.6c.4 0 .5-.2.5-.4v-1.5c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.2 1.9.9 2.3.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 014 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.8-3.6 4 .3.3.5.8.5 1.5v2.2c0 .2.1.5.6.4A8 8 0 0010 2z" />,
+  info: () => <><circle cx="10" cy="10" r="7.5" /><path d="M10 9v5M10 6v.1" /></>,
 };
 
 export function Icon(props: { name: string; size?: number }) {

@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { Store } from '../model/store';
-import { isNodeId, KINDS, NodeKind, SNode, Stop, uid } from '../model/types';
+import { isNodeId, Journey, KINDS, NodeKind, SNode, Stop, uid } from '../model/types';
+import { journeyEdges, journeyNodes, tokenAt } from '../model/journeys';
 import { Simulation, SimResult } from '../sim/sim';
 import type { View2D } from '../design/DesignCanvas';
 
@@ -19,6 +20,8 @@ const MESH_KINDS: NodeKind[] = ['service', 'database', 'queue', 'cache', 'lb', '
 export interface ViewerHooks {
   onHover(h: { id: string; x: number; y: number } | null): void;
   onSim(r: SimResult | null): void;
+  /** Short user-facing message (e.g. a journey hop that can't be recorded). */
+  onToast?(msg: string): void;
 }
 
 interface EdgeGeo { id: string; pts: Float32Array; len: number; flow: boolean; color: THREE.Color; seed: number; rank: Uint8Array }
@@ -45,6 +48,8 @@ const RED = new THREE.Color('#ff4d4f');
 const AMBER = new THREE.Color('#f59e0b');
 const DEAD = new THREE.Color('#2a2f3a');
 const WHITE = new THREE.Color('#ffffff');
+const FADED = new THREE.Color('#151922'); // what off-journey nodes and connections fade toward
+const TRAIL = 10; // dots in the journey token's trail
 const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
 function unitGeometry(kind: NodeKind): THREE.BufferGeometry {
@@ -151,11 +156,16 @@ export class Viewer3D {
   private labelGroup = new THREE.Group();
   private slabGroup = new THREE.Group();
   private selGroup = new THREE.Group();
+  private journeyGroup = new THREE.Group();
+  private tokenHead = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 12), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
   private slabGeo = new THREE.BoxGeometry(1, 1, 1);
   private slabEdges = new THREE.EdgesGeometry(this.slabGeo);
   private slabMat = new THREE.MeshStandardMaterial({ color: '#8fb3ff', transparent: true, opacity: 0.06, depthWrite: false });
   private slabLineMat = new THREE.LineBasicMaterial({ color: '#4a5d85', transparent: true, opacity: 0.6 });
   private edgeGeos: EdgeGeo[] = [];
+  private edgeGeoById = new Map<string, EdgeGeo>();
+  /** Journey on screen, resolved once per rebuild. */
+  private jc: { j: Journey; step: number; nodes: Set<string>; edges: Map<string, number[]> } | null = null;
   private sun: THREE.DirectionalLight;
   private layerY = new Map<string, number>();
   private visibleLayers = new Set<string>();
@@ -249,7 +259,8 @@ export class Viewer3D {
     }));
     this.particles.frustumCulled = false;
 
-    this.scene.add(this.solidLines, this.dashedLines, this.arrows, this.particles, this.labelGroup, this.slabGroup, this.selGroup);
+    this.scene.add(this.solidLines, this.dashedLines, this.arrows, this.particles, this.labelGroup, this.slabGroup, this.selGroup, this.journeyGroup, this.tokenHead);
+    this.tokenHead.visible = false;
 
     store.subscribe(() => { this.dirty = true; });
     new ResizeObserver(() => this.resize()).observe(host);
@@ -322,7 +333,7 @@ export class Viewer3D {
         this.hooks.onSim(this.simResult);
       }
     }
-    if (this.simOn || this.flowsOn) {
+    if (this.simOn || this.flowsOn || this.jc) {
       this.time += dt;
       this.updateParticles();
       need = true;
@@ -386,6 +397,9 @@ export class Viewer3D {
   private rebuild() {
     this.dirty = false;
     const sc = this.store.scene;
+    const j = this.store.activeJourney;
+    this.jc = j ? { j, step: this.store.journey!.step, nodes: journeyNodes(sc, j), edges: journeyEdges(j) } : null;
+    if (!this.jc && !this.flowsOn && !this.simOn) this.particles.geometry.setDrawRange(0, 0);
     this.layerY.clear();
     this.visibleLayers.clear();
     sc.layers.forEach((l, i) => {
@@ -425,6 +439,7 @@ export class Viewer3D {
     }
     this.applyColors();
     this.buildEdges();
+    this.buildJourney();
     this.buildLabels();
     this.buildSlabs();
     this.buildSelection();
@@ -447,6 +462,7 @@ export class Viewer3D {
 
   private nodeColor(n: SNode, out: THREE.Color) {
     out.set(n.color);
+    if (this.jc && !this.store.recording && !this.jc.nodes.has(n.id)) return out.lerp(FADED, 0.8);
     if (n.down) return out.copy(DEAD);
     const st = this.simResult?.nodes.get(n.id);
     if (!st) return out;
@@ -473,6 +489,9 @@ export class Viewer3D {
     const sc = this.store.scene;
     const solid: number[] = [], solidC: number[] = [], dashed: number[] = [], dashedC: number[] = [];
     this.edgeGeos = [];
+    this.edgeGeoById.clear();
+    const jc = this.jc;
+    const jCol = jc ? new THREE.Color(jc.j.color) : null;
     let ai = 0;
     const p0 = new THREE.Vector3(), p1 = new THREE.Vector3(), mid = new THREE.Vector3();
     const curve = new THREE.QuadraticBezierCurve3(p0, mid, p1);
@@ -490,16 +509,26 @@ export class Viewer3D {
         pts[i * 3] = v3.x; pts[i * 3 + 1] = v3.y; pts[i * 3 + 2] = v3.z;
       }
       const lineCol = new THREE.Color(a.color).lerp(new THREE.Color('#6b7790'), 0.55);
+      if (jc) {
+        const ks = jc.edges.get(e.id);
+        if (!ks) { if (!this.store.recording) lineCol.lerp(FADED, 0.75); }
+        else {
+          lineCol.copy(jCol!);
+          if (jc.step >= 0 && !ks.some((k) => k <= jc.step)) lineCol.lerp(FADED, 0.6); // not reached yet
+        }
+      }
       const arr = e.dashed ? dashed : solid, carr = e.dashed ? dashedC : solidC;
       for (let i = 0; i < SEG; i++) {
         arr.push(pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2], pts[i * 3 + 3], pts[i * 3 + 4], pts[i * 3 + 5]);
         carr.push(lineCol.r, lineCol.g, lineCol.b, lineCol.r, lineCol.g, lineCol.b);
       }
       const len = curve.getLength();
-      this.edgeGeos.push({
+      const geo: EdgeGeo = {
         id: e.id, pts, len, flow: e.flow, seed: (this.edgeGeos.length * 2654435761) >>> 0, rank: slotRank(e.id),
         color: new THREE.Color(a.color).lerp(WHITE, 0.35),
-      });
+      };
+      this.edgeGeos.push(geo);
+      this.edgeGeoById.set(e.id, geo);
       // arrowhead just outside the target
       if (ai < this.arrows.instanceMatrix.count) {
         const ta = Math.max(0.5, Math.min(0.97, 1 - (Math.max(b.w, b.h) * S * 0.5 + 0.3) / len));
@@ -529,6 +558,15 @@ export class Viewer3D {
     const P = this.pPos, C = this.pCol;
     const sim = this.simOn ? this.simResult : null;
     let i = 0;
+    // a journey replaces the ambient flow dots (simulation dots stay)
+    if (this.jc) i = this.journeyToken(i);
+    if (this.jc && !sim) {
+      const g = this.particles.geometry;
+      g.setDrawRange(0, i);
+      g.attributes.position.needsUpdate = true;
+      g.attributes.color.needsUpdate = true;
+      return;
+    }
     for (const eg of this.edgeGeos) {
       let n: number, errF = 0;
       if (sim) {
@@ -564,6 +602,61 @@ export class Viewer3D {
     g.setDrawRange(0, i);
     g.attributes.position.needsUpdate = true;
     g.attributes.color.needsUpdate = true;
+  }
+
+  /** Glowing tubes along the shown journey's connections (thin lines alone are hard to see in 3D). */
+  private buildJourney() {
+    for (const c of this.journeyGroup.children) {
+      const m = c as THREE.Mesh;
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    this.journeyGroup.clear();
+    const jc = this.jc;
+    this.tokenHead.visible = false;
+    if (!jc) return;
+    (this.tokenHead.material as THREE.MeshBasicMaterial).color.set(jc.j.color).lerp(WHITE, 0.45);
+    for (const [edgeId, ks] of jc.edges) {
+      const eg = this.edgeGeoById.get(edgeId);
+      if (!eg) continue;
+      const reached = jc.step < 0 || ks.some((k) => k <= jc.step);
+      const current = ks.includes(jc.step);
+      const pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= SEG; i++) pts.push(new THREE.Vector3(eg.pts[i * 3], eg.pts[i * 3 + 1], eg.pts[i * 3 + 2]));
+      const tube = new THREE.Mesh(
+        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), SEG * 2, current ? 0.075 : 0.05, 8),
+        new THREE.MeshBasicMaterial({ color: jc.j.color, transparent: true, opacity: current ? 0.95 : reached ? 0.6 : 0.18, depthWrite: false }),
+      );
+      tube.renderOrder = 5;
+      this.journeyGroup.add(tube);
+    }
+  }
+
+  /** Bright token with a short trail walking the shown journey; writes particles from index i. */
+  private journeyToken(i: number): number {
+    const { j, step } = this.jc!;
+    const tk = tokenAt(j, step, performance.now());
+    const st = tk && j.steps[tk.k];
+    const eg = st && this.edgeGeoById.get(st.edge);
+    this.tokenHead.visible = !!eg;
+    if (!eg) return i;
+    const P = this.pPos, C = this.pCol;
+    const c = new THREE.Color(j.color);
+    for (let d = 0; d < TRAIL && i < MAX_PARTICLES; d++) {
+      const tt = tk!.t - d * (0.35 / eg.len); // trail spacing in world units, not edge fraction
+      if (tt < 0) break;
+      const u = st!.back ? 1 - tt : tt;
+      const f = Math.min(SEG - 1e-6, u * SEG);
+      const a = (f | 0) * 3, b = a + 3, fr = f - (f | 0), o = i * 3;
+      P[o] = eg.pts[a] + (eg.pts[b] - eg.pts[a]) * fr;
+      P[o + 1] = eg.pts[a + 1] + (eg.pts[b + 1] - eg.pts[a + 1]) * fr;
+      P[o + 2] = eg.pts[a + 2] + (eg.pts[b + 2] - eg.pts[a + 2]) * fr;
+      col.copy(c).lerp(WHITE, d === 0 ? 0.6 : 0).multiplyScalar(d === 0 ? 1.6 : 1 - d / TRAIL);
+      C[o] = col.r; C[o + 1] = col.g; C[o + 2] = col.b;
+      if (d === 0) this.tokenHead.position.set(P[o], P[o + 1], P[o + 2]);
+      i++;
+    }
+    return i;
   }
 
   /**
@@ -618,6 +711,17 @@ export class Viewer3D {
       if (!l.visible || !m) return;
       put('L:' + l.id, l.name, '', '#6ea8ff', (m[0] - 60) * S + 1.2, i * LAYER_GAP * S + 0.05, (m[1] - 60) * S, 0.5, true);
     });
+    // journey step labels sit on their connection, a little toward the step's start
+    if (this.jc) {
+      const { j, step } = this.jc;
+      j.steps.forEach((st, k) => {
+        const eg = this.edgeGeoById.get(st.edge);
+        if (!eg || (step >= 0 && k !== step && k > step)) return;
+        const ix = Math.round((st.back ? 0.64 : 0.36) * SEG) * 3;
+        const title = `${k + 1}${st.note ? ' · ' + st.note : ''}`;
+        put('J:' + k, title, '', j.color, eg.pts[ix], eg.pts[ix + 1] + 0.3, eg.pts[ix + 2], 0.42, true);
+      });
+    }
     for (const id of this.labelData.keys()) if (!seen.has(id)) this.labelData.delete(id);
     // move live sprites right away so labels never trail a dragged node
     for (const [id, l] of this.labels) {
@@ -717,6 +821,18 @@ export class Viewer3D {
       );
       this.selGroup.add(new THREE.Box3Helper(box, new THREE.Color('#6ea8ff')));
     }
+    // recording a journey: outline the box the next hop starts from
+    const head = this.store.recording ? this.store.recordingHead : null;
+    const hn = head ? sc.nodes[head] : null;
+    if (hn && this.visibleLayers.has(hn.layer) && this.jc) {
+      const base = this.nodeBase(hn);
+      const p = 0.2;
+      const box = new THREE.Box3(
+        new THREE.Vector3(hn.x * S - p, base - p, hn.y * S - p),
+        new THREE.Vector3((hn.x + hn.w) * S + p, base + Math.max(2, hn.height) * S + p, (hn.y + hn.h) * S + p),
+      );
+      this.selGroup.add(new THREE.Box3Helper(box, new THREE.Color(this.jc.j.color)));
+    }
   }
 
   // ---------- picking & interaction ----------
@@ -750,6 +866,15 @@ export class Viewer3D {
     const hit = this.pick(e.clientX, e.clientY);
     if (!hit) return;
     const st = this.store;
+    if (st.recording) {
+      // recording a journey: a click on a box extends it; empty space still orbits
+      const n = st.scene.nodes[hit.id];
+      if (n && n.kind !== 'zone') {
+        const err = st.recordNode(hit.id);
+        if (err) this.hooks.onToast?.(err);
+      }
+      return;
+    }
     if (e.shiftKey) {
       const next = new Set(st.selection);
       next.has(hit.id) ? next.delete(hit.id) : next.add(hit.id);
@@ -879,6 +1004,26 @@ export class Viewer3D {
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
     const dist = Math.max(n.w, n.h) * S * 2.5 + 5;
     this.flyTo(t.clone().addScaledVector(dir, dist), t, 700);
+  }
+
+  /** Fly to a 3/4 view that frames every visible node on every visible floor. */
+  overview(dur = 900) {
+    if (this.dirty) this.rebuild();
+    const box = new THREE.Box3();
+    for (const n of Object.values(this.store.scene.nodes)) {
+      if (!this.visibleLayers.has(n.layer)) continue;
+      const base = this.nodeBase(n);
+      box.expandByPoint(new THREE.Vector3(n.x * S, base, n.y * S));
+      box.expandByPoint(new THREE.Vector3((n.x + n.w) * S, base + n.height * S, (n.y + n.h) * S));
+    }
+    if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(10, 1, 10));
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    // distance at which the bounding sphere fits the narrower of the two fields of view, plus a margin
+    const vFov = THREE.MathUtils.degToRad(this.camera.fov);
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
+    const dist = Math.min(this.controls.maxDistance, Math.max(this.controls.minDistance, (sphere.radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.05));
+    const dir = new THREE.Vector3(0.3, 0.62, 0.78).normalize(); // same angle as entering 3D
+    return this.flyTo(sphere.center.clone().addScaledVector(dir, dist), sphere.center, dur);
   }
 
   private topDownDistance(width: number) {

@@ -1,9 +1,10 @@
-// Agent-facing tools for Stratos. Transport-agnostic: WebMCP registers them today, and a stdio bridge
+// Agent-facing tools for 8D modeling. Transport-agnostic: WebMCP registers them today, and a stdio bridge
 // or anything else can reuse the same definitions later. Every mutation goes through the store, so an
 // agent's edits show up live in 2D/3D and can be undone with Ctrl+Z like any user edit.
 
 import type { Store } from '../model/store';
-import { KINDS, makeEdge, makeNode, NodeKind, Scene, SEdge, SNode, uid } from '../model/types';
+import { JOURNEY_COLORS, Journey, JStep, KINDS, makeEdge, makeNode, NodeKind, Scene, SEdge, SNode, uid } from '../model/types';
+import { findPath, stepEnds } from '../model/journeys';
 import { Simulation } from '../sim/sim';
 import { shareUrl, ShareView } from '../model/share';
 
@@ -62,6 +63,42 @@ function resolveNode(s: Scene, ref: string, refs?: Map<string, string>): SNode {
 }
 
 const layerName = (s: Scene, id: string) => s.layers.find((l) => l.id === id)?.name ?? id;
+
+function resolveJourney(s: Scene, ref: string): Journey {
+  const j = s.journeys.find((x) => x.id === ref) ?? s.journeys.find((x) => x.name.toLowerCase() === String(ref).toLowerCase());
+  if (!j) throw new ToolError(`No journey "${ref}" (have: ${s.journeys.map((x) => x.name).join(', ') || 'none'})`);
+  return j;
+}
+
+/** start + hops ("go to X, then Y") → steps, following existing connections (backwards for responses). */
+function journeySteps(s: Scene, start: string, hops: { to: string; note?: string }[]): JStep[] {
+  if (!Array.isArray(hops) || !hops.length) throw new ToolError('steps must list at least one hop');
+  let cur = resolveNode(s, start).id;
+  const out: JStep[] = [];
+  for (const h of hops) {
+    const to = resolveNode(s, h.to).id;
+    const path = findPath(s, cur, to, new Set(out.map((st) => st.edge)));
+    if (!path) throw new ToolError(`"${s.nodes[cur].label}" and "${s.nodes[to].label}" aren't connected; add a connection with modeling8d_connect first`);
+    if (!path.length) throw new ToolError(`Hop to "${s.nodes[to].label}" starts and ends on the same node`);
+    if (h.note) path[path.length - 1].note = String(h.note);
+    out.push(...path);
+    cur = to;
+  }
+  return out;
+}
+
+function journeyOut(s: Scene, j: Journey) {
+  return {
+    id: j.id, name: j.name, color: j.color,
+    steps: j.steps.map((st, k) => {
+      const ends = stepEnds(s, st);
+      return {
+        n: k + 1, from: ends ? s.nodes[ends.from]?.label : null, to: ends ? s.nodes[ends.to]?.label : null,
+        connection: st.edge, ...(st.back ? { response: true } : {}), ...(st.note ? { note: st.note } : {}),
+      };
+    }),
+  };
+}
 
 function nodeOut(s: Scene, n: SNode) {
   return {
@@ -163,10 +200,10 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
 
   return [
     {
-      name: 'stratos_get_scene',
+      name: 'modeling8d_get_scene',
       title: 'Read diagram',
       description:
-        'Read the current Stratos system diagram: floors (layers, index 0 = bottom), nodes (services, databases, queues, caches, load balancers, clients, zones, text) and directed connections. Call this before editing.',
+        'Read the current 8D modeling system diagram: floors (layers, index 0 = bottom), nodes (services, databases, queues, caches, load balancers, clients, zones, text) and directed connections. Call this before editing.',
       inputSchema: { type: 'object', properties: {} },
       annotations: { readOnlyHint: true },
       execute: guard(() => {
@@ -176,16 +213,17 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
           nodes: Object.values(s.nodes).map((n) => nodeOut(s, n)),
           edges: Object.values(s.edges).map((e) => edgeOut(s, e)),
           tourStops: s.stops.map((t) => t.name),
+          journeys: s.journeys.map((j) => ({ id: j.id, name: j.name, steps: j.steps.length })),
           selection: [...store.selection],
         };
       }),
     },
     {
-      name: 'stratos_add_nodes',
+      name: 'modeling8d_add_nodes',
       title: 'Add components',
       description:
         'Add one or more components to the diagram in a single call. Kinds: service, database, queue, cache, lb (load balancer), client (traffic source), zone (grouping box, e.g. a VPC), text. ' +
-        'Give each node a `ref` to connect it in a later stratos_connect call. Positions are optional; call stratos_auto_layout afterwards for a clean arrangement.',
+        'Give each node a `ref` to connect it in a later modeling8d_connect call. Positions are optional; call modeling8d_auto_layout afterwards for a clean arrangement.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -195,7 +233,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
             items: {
               type: 'object',
               required: ['kind', 'label'],
-              properties: { ref: { type: 'string', description: 'Your handle for this node, usable in stratos_connect' }, kind: { type: 'string', enum: NODE_KINDS }, ...nodeFields },
+              properties: { ref: { type: 'string', description: 'Your handle for this node, usable in modeling8d_connect' }, kind: { type: 'string', enum: NODE_KINDS }, ...nodeFields },
             },
           },
         },
@@ -232,10 +270,10 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_connect',
+      name: 'modeling8d_connect',
       title: 'Connect components',
       description:
-        'Add directed connections (caller → callee) in one call. `from`/`to` accept a node id, a ref returned by stratos_add_nodes, or an exact node label. ' +
+        'Add directed connections (caller → callee) in one call. `from`/`to` accept a node id, a ref returned by modeling8d_add_nodes, or an exact node label. ' +
         '`mult` = calls to the target per request handled (e.g. 0.3 = 30% of requests hit the DB). Set async=true for fire-and-forget links such as publishing to a queue.',
       inputSchema: {
         type: 'object',
@@ -252,7 +290,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
               },
             },
           },
-          refs: { type: 'object', description: 'Optional ref→id map from stratos_add_nodes', additionalProperties: { type: 'string' } },
+          refs: { type: 'object', description: 'Optional ref→id map from modeling8d_add_nodes', additionalProperties: { type: 'string' } },
         },
         required: ['edges'],
       },
@@ -275,7 +313,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_update',
+      name: 'modeling8d_update',
       title: 'Update components',
       description:
         'Change existing nodes or connections. Each update targets `target` (id or exact label) and sets any given fields. ' +
@@ -331,7 +369,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_delete',
+      name: 'modeling8d_delete',
       title: 'Delete components',
       description: 'Delete nodes (by id or exact label, their connections go too) and/or connections (by edge id). Undoable.',
       inputSchema: { type: 'object', properties: { targets: { type: 'array', items: { type: 'string' }, minItems: 1 } }, required: ['targets'] },
@@ -344,7 +382,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_layers',
+      name: 'modeling8d_layers',
       title: 'Manage floors',
       description: 'Manage floors. Actions: add (names, appended on top), rename (target, name), reorder (names bottom→top, all floors), show/hide (target).',
       inputSchema: {
@@ -377,7 +415,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_auto_layout',
+      name: 'modeling8d_auto_layout',
       title: 'Auto-layout',
       description: 'Arrange nodes neatly: request flow goes top→bottom by dependency depth, each floor forms its own block. Optionally only some floors.',
       inputSchema: { type: 'object', properties: { layers: { type: 'array', items: { type: 'string' } } } },
@@ -389,7 +427,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_simulate',
+      name: 'modeling8d_simulate',
       title: 'Simulate traffic',
       description:
         'Run the traffic simulation headlessly and report throughput, error rate, latency and bottlenecks. Does not change the diagram. ' +
@@ -432,7 +470,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_view',
+      name: 'modeling8d_view',
       title: 'Change view',
       description:
         'Control what the user sees: switch between the 2D editor ("design") and the 3D view ("play"), start/stop the live simulation and animated flows in 3D, and focus a node.',
@@ -456,7 +494,77 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_undo',
+      name: 'modeling8d_journeys',
+      title: 'User journeys',
+      description:
+        'Manage user journeys: named, ordered paths a request takes through the diagram (e.g. "Login", "Checkout"), shown as a numbered, animated path in 2D and 3D. ' +
+        'Actions: list (read), create, update (rename/recolor/replace steps), delete, show (put one on screen, optionally focused on a step; omit id to hide). ' +
+        'Define a path with `start` (node id or label) and `steps`, each a hop `{to, note}` to the next node. A hop follows the direct connection, or the shortest chain of connections if there is none; ' +
+        'hops back toward the caller (responses) walk connections backwards automatically. Connections must already exist (modeling8d_connect).',
+      inputSchema: {
+        type: 'object',
+        required: ['action'],
+        properties: {
+          action: { type: 'string', enum: ['list', 'create', 'update', 'delete', 'show'] },
+          id: { type: 'string', description: 'Journey id or name (update/delete/show)' },
+          name: { type: 'string' },
+          color: { type: 'string', description: '#rrggbb (default: next unused journey color)' },
+          start: { type: 'string', description: 'Node where the journey starts (create, or update with steps)' },
+          steps: {
+            type: 'array',
+            description: 'Hops in order, each to the next node. Example for a login: start "Web app", steps [{to:"API gateway",note:"POST /login"},{to:"Auth"},{to:"Users DB",note:"check password"},{to:"Web app",note:"200 + session cookie"}]',
+            items: { type: 'object', required: ['to'], properties: { to: { type: 'string', description: 'Node id or label' }, note: { type: 'string', description: 'Caption shown for this hop' } } },
+          },
+          step: { type: 'number', description: 'show: 1-based step to focus (omit for the whole path)' },
+        },
+      },
+      execute: guard(({ action, id, name, color, start, steps, step }: any) => {
+        const s = store.scene;
+        switch (action) {
+          case 'list':
+            return { journeys: s.journeys.map((j) => journeyOut(s, j)) };
+          case 'create': {
+            if (!start) throw new ToolError('create needs `start` and `steps`');
+            const built = journeySteps(s, start, steps);
+            const used = new Set(s.journeys.map((j) => j.color));
+            const j: Journey = {
+              id: uid('j'), name: name || `Journey ${s.journeys.length + 1}`,
+              color: color || JOURNEY_COLORS.find((c) => !used.has(c)) || JOURNEY_COLORS[s.journeys.length % JOURNEY_COLORS.length],
+              steps: built,
+            };
+            store.update((sc) => { sc.journeys.push(j); });
+            store.setJourney(j.id);
+            return journeyOut(store.scene, j);
+          }
+          case 'update': {
+            const j = resolveJourney(s, id);
+            const built = steps ? journeySteps(s, start ?? (() => { throw new ToolError('Replacing steps needs `start`'); })(), steps) : null;
+            store.update((sc) => {
+              const x = sc.journeys.find((y) => y.id === j.id)!;
+              if (name) x.name = name;
+              if (color) x.color = color;
+              if (built) x.steps = built;
+            });
+            return journeyOut(store.scene, store.journeyById(j.id)!);
+          }
+          case 'delete': {
+            const j = resolveJourney(s, id);
+            store.update((sc) => { sc.journeys = sc.journeys.filter((y) => y.id !== j.id); });
+            return { deleted: j.name };
+          }
+          case 'show': {
+            if (!id) { store.setJourney(null); return { shown: null }; }
+            const j = resolveJourney(s, id);
+            store.setJourney(j.id, step ? step - 1 : -1);
+            return { shown: j.name, step: store.journey!.step + 1 || 'all' };
+          }
+          default:
+            throw new ToolError(`Unknown action "${action}"`);
+        }
+      }),
+    },
+    {
+      name: 'modeling8d_undo',
       title: 'Undo',
       description: 'Undo the last change (yours or the user\'s). Pass steps to undo several.',
       inputSchema: { type: 'object', properties: { steps: { type: 'number', minimum: 1, maximum: 50, default: 1 } } },
@@ -467,7 +575,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       }),
     },
     {
-      name: 'stratos_share_link',
+      name: 'modeling8d_share_link',
       title: 'Get share link',
       description: 'Get a URL that opens this exact diagram (the whole scene is compressed into the link; nothing is uploaded). By default the link also restores the current view: 2D/3D mode, camera, tour stop, simulation and selection.',
       inputSchema: {

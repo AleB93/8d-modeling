@@ -1,5 +1,5 @@
 // Network-first, cache fallback: the app keeps working offline after one visit.
-const CACHE = 'stratos-v1';
+const CACHE = 'stratos-v1'; // legacy name (pre-rename)
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (e) => {

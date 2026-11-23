@@ -1,5 +1,6 @@
 import type { Store } from '../model/store';
-import { isNodeId, KINDS, makeEdge, makeNode, NodeKind, SEdge, SNode, uid } from '../model/types';
+import { isNodeId, Journey, KINDS, makeEdge, makeNode, NodeKind, SEdge, SNode, uid } from '../model/types';
+import { journeyEdges, journeyNodes, tokenAt } from '../model/journeys';
 import { bounds, cxOf, cyOf, distToSeg, edgeEnds } from '../model/geom';
 
 export type Tool = 'select' | 'hand' | 'arrow' | NodeKind;
@@ -7,6 +8,8 @@ export type Tool = 'select' | 'hand' | 'arrow' | NodeKind;
 export interface DesignHooks {
   onTool(t: Tool): void;
   onEditLabel(id: string): void;
+  /** Short user-facing message (e.g. a journey hop that can't be recorded). */
+  onToast?(msg: string): void;
 }
 
 export interface View2D { cx: number; cy: number; width: number }
@@ -156,7 +159,7 @@ export class DesignCanvas {
         if (!border) continue;
         score = 1;
       } else score = 2;
-      if (n.layer === this.store.activeLayer) score += 10;
+      if (!this.store.allLayers && n.layer === this.store.activeLayer) score += 10;
       if (score > bestScore) { best = n; bestScore = score; }
     }
     return best;
@@ -195,6 +198,19 @@ export class DesignCanvas {
       return;
     }
     if (e.button !== 0) return;
+
+    if (this.store.recording) {
+      // recording a journey: click boxes (or connections) in order; drag empty space to pan
+      const node = this.hitNode(wx, wy, true);
+      const edge = node ? null : this.hitEdge(wx, wy);
+      const err = node && node.kind !== 'text' ? this.store.recordNode(node.id) : edge ? this.store.recordEdge(edge.id) : undefined;
+      if (err) this.hooks.onToast?.(err);
+      if (err === undefined) {
+        this.drag = { t: 'pan', sx: e.clientX, sy: e.clientY, vx: this.view.x, vy: this.view.y };
+        this.canvas.style.cursor = 'grabbing';
+      }
+      return;
+    }
 
     if (this.tool === 'arrow') {
       const n = this.hitNode(wx, wy);
@@ -238,7 +254,9 @@ export class DesignCanvas {
     const d = this.drag;
     const [wx, wy] = this.toWorld(e.offsetX, e.offsetY);
     if (!d) {
-      if (this.tool === 'select' && !this.space) {
+      if (this.store.recording && !this.space) {
+        this.canvas.style.cursor = this.hitNode(wx, wy, true) || this.hitEdge(wx, wy) ? 'pointer' : 'grab';
+      } else if (this.tool === 'select' && !this.space) {
         const h = this.hitHandle(e.offsetX, e.offsetY);
         this.canvas.style.cursor = h ? (h.hx === h.hy ? 'nwse-resize' : 'nesw-resize') : this.hitNode(wx, wy) ? 'move' : 'default';
       }
@@ -309,7 +327,7 @@ export class DesignCanvas {
         if (x1 - x0 > 2 || y1 - y0 > 2) {
           const ids = new Set(d.base);
           for (const n of this.visibleNodes()) {
-            if (n.layer === s.activeLayer && n.x >= x0 && n.y >= y0 && n.x + n.w <= x1 && n.y + n.h <= y1) ids.add(n.id);
+            if (s.inFocus(n.layer) && n.x >= x0 && n.y >= y0 && n.x + n.w <= x1 && n.y + n.h <= y1) ids.add(n.id);
           }
           for (const e of Object.values(s.scene.edges)) if (ids.has(e.from) && ids.has(e.to)) ids.add(e.id);
           s.select(ids);
@@ -369,7 +387,7 @@ export class DesignCanvas {
     let bx: number | null = null, by: number | null = null, bdx = tol, bdy = tol;
     const vx0 = this.view.x, vy0 = this.view.y, vx1 = vx0 + this.w / this.view.z, vy1 = vy0 + this.h / this.view.z;
     for (const n of this.visibleNodes()) {
-      if (orig.has(n.id) || n.layer !== this.store.activeLayer) continue;
+      if (orig.has(n.id) || !this.store.inFocus(n.layer)) continue;
       if (n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0) continue;
       for (const t of [n.x, n.x + n.w / 2, n.x + n.w]) for (const v of xs) {
         const dd = Math.abs(t - v);
@@ -407,6 +425,7 @@ export class DesignCanvas {
   };
 
   private onDbl = (e: MouseEvent) => {
+    if (this.store.recording) return;
     const [wx, wy] = this.toWorld(e.offsetX, e.offsetY);
     const n = this.hitNode(wx, wy);
     if (n) {
@@ -437,7 +456,7 @@ export class DesignCanvas {
       if (k === 'v') { this.paste(); return true; }
       if (k === 'd') { this.copy(); this.paste(); return true; }
       if (k === 'a') {
-        const ids = this.visibleNodes().filter((n) => n.layer === s.activeLayer).map((n) => n.id);
+        const ids = this.visibleNodes().filter((n) => s.inFocus(n.layer)).map((n) => n.id);
         s.select(ids);
         return true;
       }
@@ -513,18 +532,26 @@ export class DesignCanvas {
     const vx0 = view.x, vy0 = view.y, vx1 = vx0 + this.w / z, vy1 = vy0 + this.h / z;
     const inView = (n: SNode) => !(n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0);
     const s = this.store.scene;
-    const active = this.store.activeLayer;
     const vis = new Set(s.layers.filter((l) => l.visible).map((l) => l.id));
     const sel = this.store.selection;
 
+    // a shown journey takes over dimming: everything off its path fades, whatever the layer
+    const J = this.store.activeJourney;
+    // while recording, keep every box readable: you need to see what to click next
+    const rec = !!this.store.recording;
+    const jNodes = J && !rec ? journeyNodes(s, J) : null;
+    const jEdges = J && !rec ? journeyEdges(J) : null;
+    const dimNode = (n: SNode) => !rec && (jNodes ? !jNodes.has(n.id) : !this.store.inFocus(n.layer));
+
     const nodes = Object.values(s.nodes);
-    for (const n of nodes) if (n.kind === 'zone' && vis.has(n.layer) && inView(n)) this.drawNode(n, n.layer !== active);
+    for (const n of nodes) if (n.kind === 'zone' && vis.has(n.layer) && inView(n)) this.drawNode(n, dimNode(n));
     for (const e of Object.values(s.edges)) {
       const a = s.nodes[e.from], b = s.nodes[e.to];
       if (!a || !b || !vis.has(a.layer) || !vis.has(b.layer)) continue;
-      this.drawEdge(e, a, b, a.layer !== active && b.layer !== active, sel.has(e.id));
+      this.drawEdge(e, a, b, !rec && (jEdges ? !jEdges.has(e.id) : !this.store.inFocus(a.layer) && !this.store.inFocus(b.layer)), sel.has(e.id));
     }
-    for (const n of nodes) if (n.kind !== 'zone' && vis.has(n.layer) && inView(n)) this.drawNode(n, n.layer !== active);
+    for (const n of nodes) if (n.kind !== 'zone' && vis.has(n.layer) && inView(n)) this.drawNode(n, dimNode(n));
+    if (J) this.drawJourney(J, this.store.journey?.step ?? -1, vis);
 
     // ---- overlays ----
     ctx.globalAlpha = 1;
@@ -580,6 +607,94 @@ export class DesignCanvas {
       ctx.lineWidth = 2 / z;
       this.arrowLine(x1, y1, x2, y2, false);
     }
+  }
+
+  /** Journey overlay: colored path with numbered steps, a token walking it, and the recording cursor. */
+  private drawJourney(j: Journey, step: number, vis: Set<string>) {
+    const { ctx } = this;
+    const z = this.view.z;
+    const s = this.store.scene;
+    const fwd = new Set<string>(), bwd = new Set<string>();
+    for (const st of j.steps) (st.back ? bwd : fwd).add(st.edge);
+    // segment of step k in walking order; request/response on one connection sit side by side
+    const seg = (k: number): [number, number, number, number] | null => {
+      const st = j.steps[k];
+      const e = s.edges[st.edge];
+      const a = e && s.nodes[e.from], b = e && s.nodes[e.to];
+      if (!a || !b || !vis.has(a.layer) || !vis.has(b.layer)) return null;
+      let [x1, y1, x2, y2] = edgeEnds(a, b);
+      if (st.back) [x1, y1, x2, y2] = [x2, y2, x1, y1];
+      if (fwd.has(st.edge) && bwd.has(st.edge)) {
+        const L = Math.hypot(x2 - x1, y2 - y1) || 1;
+        const off = 7 / Math.min(1, z);
+        const nx = (-(y2 - y1) / L) * off, ny = ((x2 - x1) / L) * off;
+        x1 += nx; y1 += ny; x2 += nx; y2 += ny;
+      }
+      return [x1, y1, x2, y2];
+    };
+    const alpha = (k: number) => (step < 0 || k === step ? 1 : k < step ? 0.5 : 0.16);
+    const segs = j.steps.map((_, k) => seg(k));
+
+    ctx.strokeStyle = j.color;
+    ctx.lineWidth = Math.max(3, 2.5 / z);
+    segs.forEach((g, k) => {
+      if (!g) return;
+      ctx.globalAlpha = alpha(k);
+      this.arrowLine(g[0], g[1], g[2], g[3], !!j.steps[k].back);
+    });
+
+    // numbered badges near each step's start (screen-constant size)
+    const r = 9 / z;
+    ctx.font = `700 ${11 / z}px Inter, ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    segs.forEach((g, k) => {
+      if (!g) return;
+      const bx = g[0] + (g[2] - g[0]) * 0.28, by = g[1] + (g[3] - g[1]) * 0.28;
+      ctx.globalAlpha = alpha(k);
+      ctx.fillStyle = j.color;
+      ctx.beginPath();
+      ctx.arc(bx, by, k === step ? r * 1.3 : r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = C.bg;
+      ctx.fillText(String(k + 1), bx, by + 0.5 / z);
+    });
+
+    // the token: walks the whole journey, or loops the focused step
+    const tk = tokenAt(j, step, performance.now());
+    const g = tk && segs[tk.k];
+    if (g) {
+      const t = tk!.t;
+      const x = g[0] + (g[2] - g[0]) * t, y = g[1] + (g[3] - g[1]) * t;
+      ctx.globalAlpha = 1;
+      ctx.shadowColor = j.color;
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = j.color;
+      ctx.beginPath();
+      ctx.arc(x, y, 7 / z, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(x, y, 3 / z, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // recording: pulsing ring on the box the next hop starts from
+    const rec = this.store.recording;
+    const head = rec?.id === j.id ? this.store.recordingHead : null;
+    const hn = head ? s.nodes[head] : null;
+    if (hn) {
+      const pad = (6 + 3 * Math.sin(performance.now() / 180)) / z;
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = j.color;
+      ctx.lineWidth = 2 / z;
+      ctx.setLineDash([6 / z, 4 / z]);
+      ctx.strokeRect(hn.x - pad, hn.y - pad, hn.w + 2 * pad, hn.h + 2 * pad);
+      ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 1;
+    if (j.steps.length || hn) this.invalidate(); // keep animating while a journey is on screen
   }
 
   private drawGrid() {

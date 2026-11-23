@@ -1,7 +1,10 @@
 {
-  "name": "sysmodel3d",
+  "name": "8d-modeling",
   "private": true,
   "version": "0.1.0",
+  "description": "8D modeling: draw system architecture in 2D, explore and simulate it in 3D",
+  "license": "MIT",
+  "author": "AleB93",
   "type": "module",
   "scripts": {
     "dev": "vite",

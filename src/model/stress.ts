@@ -45,5 +45,6 @@ export function stressScene(n = 2000): Scene {
     edges: Object.fromEntries(edges.map((e) => [e.id, e])),
     layers,
     stops: [],
+    journeys: [],
   };
 }

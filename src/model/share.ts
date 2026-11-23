@@ -1,7 +1,7 @@
 import { decode, encode } from '@ab19993/zip-string';
 import type { View2D } from '../design/DesignCanvas';
 import { decodeScene, validateScene } from './persist';
-import { KINDS, Layer, Scene, SEdge, SNode, Stop } from './types';
+import { Journey, KINDS, Layer, Scene, SEdge, SNode, Stop } from './types';
 import { SHARE_DICT } from './shareDict';
 
 // Share links, no server: everything lives in the URL fragment.
@@ -21,6 +21,8 @@ export interface ShareView {
   mult?: number;
   flows?: boolean;
   sel?: string[];
+  /** journey on screen (step -1 = whole path) */
+  journey?: { id: string; step: number };
 }
 
 export interface Shared {
@@ -32,7 +34,7 @@ export interface Shared {
 type CNode = Pick<SNode, 'id' | 'kind' | 'x' | 'y' | 'layer'> & Partial<SNode>;
 type CEdge = Pick<SEdge, 'id' | 'from' | 'to'> & Partial<SEdge>;
 type CLayer = Pick<Layer, 'id' | 'name'> & Partial<Layer>;
-interface Payload { v: 2; nodes: CNode[]; edges: CEdge[]; layers: CLayer[]; stops: Stop[]; view?: ShareView }
+interface Payload { v: 2; nodes: CNode[]; edges: CEdge[]; layers: CLayer[]; stops: Stop[]; journeys?: Journey[]; view?: ShareView }
 
 const NODE_DEFAULT_KEYS = ['w', 'h', 'height', 'color', 'capacity', 'latency'] as const;
 const EDGE_DEFAULTS = { label: '', dashed: false, mult: 1, flow: true } as const;
@@ -80,6 +82,7 @@ function packView(v: ShareView): ShareView {
   if (v.mult != null && v.mult !== 1) o.mult = v.mult;
   if (v.flows === false) o.flows = false;
   if (v.sel?.length) o.sel = v.sel;
+  if (v.journey) o.journey = v.journey;
   return o;
 }
 
@@ -91,6 +94,12 @@ export function encodeShare(scene: Scene, view?: ShareView): string {
     layers: scene.layers.map((l) => (l.visible ? { id: l.id, name: l.name } : { ...l })),
     stops: scene.stops,
   };
+  // steps keep only fields that are set, so a short journey costs a few dozen bytes
+  if (scene.journeys.length) {
+    p.journeys = scene.journeys.map((j) => ({
+      ...j, steps: j.steps.map((st) => ({ edge: st.edge, ...(st.back ? { back: true } : {}), ...(st.note ? { note: st.note } : {}) })),
+    }));
+  }
   if (view) p.view = packView(view);
   return 'z=' + encode(p, { dictionary: SHARE_DICT });
 }
@@ -104,13 +113,14 @@ export async function decodeShare(hash: string): Promise<Shared | null> {
   if (!m) return null;
   if (m[1] === 's') return { scene: await decodeScene(m[2]) };
   const p = decode<Payload>(decodeURIComponent(m[2]), { dictionary: SHARE_DICT });
-  if (!p || p.v !== 2 || !Array.isArray(p.nodes) || !Array.isArray(p.edges)) throw new Error('Not a Stratos share link');
+  if (!p || p.v !== 2 || !Array.isArray(p.nodes) || !Array.isArray(p.edges)) throw new Error('Not an 8D modeling share link');
   const scene = validateScene({
     v: 1,
     nodes: Object.fromEntries(p.nodes.map((c) => [c.id, unpackNode(c)])),
     edges: Object.fromEntries(p.edges.map((c) => [c.id, unpackEdge(c)])),
     layers: (p.layers ?? []).map((l) => ({ id: l.id, name: l.name, visible: l.visible ?? true })),
     stops: p.stops ?? [],
+    journeys: p.journeys ?? [],
   });
   return { scene, view: p.view };
 }

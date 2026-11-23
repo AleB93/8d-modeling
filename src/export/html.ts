@@ -7,7 +7,7 @@ import type { Scene } from '../model/types';
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
-export function sceneToHtml(scene: Scene, title = 'Stratos scene'): string {
+export function sceneToHtml(scene: Scene, title = '8D modeling scene'): string {
   const ver = `0.${REVISION.replace(/\D/g, '')}.0`;
   const data = JSON.stringify(scene).replace(/</g, '\\u003c');
   return `<!doctype html>
@@ -15,13 +15,13 @@ export function sceneToHtml(scene: Scene, title = 'Stratos scene'): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="generator" content="Stratos">
+<meta name="generator" content="8D modeling">
 <title>${esc(title)}</title>
 <style>
   :root { --bg:#0b0e14; --panel:rgba(18,22,31,.92); --line:#262d3b; --fg:#e8ecf4; --muted:#9aa4b8; --accent:#5b8cff; color-scheme:dark }
   * { box-sizing:border-box }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; overflow:hidden }
-  #c { position:fixed; inset:0; display:block }
+  #c { position:fixed; inset:0; display:block; width:100%; height:100% } /* setSize(…, false) leaves CSS size to us; without this, HiDPI screens show the canvas at 2× */
   #labels { position:fixed; inset:0; pointer-events:none; overflow:hidden }
   .lbl { position:absolute; left:0; top:0; white-space:nowrap; padding:4px 9px 4px 11px; border-radius:7px; background:rgba(12,15,22,.84);
          font-weight:600; font-size:12px; color:var(--fg); border-left:3px solid var(--a); transform-origin:50% 100%; will-change:transform }
@@ -44,6 +44,15 @@ export function sceneToHtml(scene: Scene, title = 'Stratos scene'): string {
   #tour button { display:block; width:100%; text-align:left; margin-top:4px }
   #tour button span { color:var(--muted); margin-right:8px; font-variant-numeric:tabular-nums }
   #hint { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); color:var(--muted); font-size:12px; pointer-events:none; text-align:center }
+  #journeys { right:12px; bottom:12px; min-width:200px; max-height:45vh; overflow:auto }
+  #journeys button { display:flex; align-items:center; gap:8px; width:100%; text-align:left; margin-top:4px }
+  #journeys button i { width:10px; height:10px; border-radius:50%; flex:none }
+  #jbar { left:50%; bottom:14px; transform:translateX(-50%); display:flex; align-items:center; gap:8px; padding:6px 8px 6px 12px; max-width:min(680px, 92vw) }
+  #jbar[hidden] { display:none }
+  #jbar .cap { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center }
+  #jbar .k { font-weight:700; font-variant-numeric:tabular-nums }
+  #jbar .note { color:var(--muted) }
+  body.journeying #hint { display:none }
   #err { position:fixed; inset:0; display:none; place-items:center; text-align:center; padding:24px; color:var(--muted) }
   @media (max-width:640px) { #floors { display:none } #hint { display:none } }
 </style>
@@ -58,6 +67,8 @@ export function sceneToHtml(scene: Scene, title = 'Stratos scene'): string {
 </div>
 <div id="floors" class="panel"><h2>Floors</h2></div>
 <div id="tour" class="panel" hidden><h2>Tour</h2></div>
+<div id="journeys" class="panel" hidden><h2>Journeys</h2></div>
+<div id="jbar" class="panel" hidden><b id="jname"></b><button id="jprev" title="Previous step">‹</button><span class="cap" id="jcap"></span><button id="jnext" title="Next step">›</button><button id="jplay" title="Play step by step">▶</button><button id="jclose" title="Hide journey (Esc)">✕</button></div>
 <div id="hint">Drag to orbit · right-drag to pan · scroll to zoom · ←/→ tour stops</div>
 <div id="err"><div><p>This viewer loads three.js from cdn.jsdelivr.net and needs a network connection.</p><p id="errmsg"></p></div></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@${ver}/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@${ver}/examples/jsm/"}}</script>
@@ -132,6 +143,7 @@ function addLabel(text, cls, accent, pos, layer, layer2) {
 
 const bb = new THREE.Box3();
 const v = new THREE.Vector3();
+const nodeMats = new Map(); // node id → { mat, color } for journey dimming
 for (const n of Object.values(sc.nodes)) {
   const g = groups.get(n.layer); if (!g) continue;
   const y = baseY(n);
@@ -140,12 +152,14 @@ for (const n of Object.values(sc.nodes)) {
   if (n.kind === 'text') { addLabel(n.label, 'text', n.color, new THREE.Vector3(cx, y + 0.3, cz), n.layer); continue; }
   if (n.kind === 'zone') {
     const m = new THREE.Mesh(geo('zone'), new THREE.MeshStandardMaterial({ color: n.color, transparent: true, opacity: 0.22, depthWrite: false, roughness: 1 }));
+    nodeMats.set(n.id, { mat: m.material, color: m.material.color.clone() });
     m.position.set(cx, y + 0.01, cz); m.scale.set(n.w * S, 0.05, n.h * S); m.receiveShadow = true;
     g.add(m);
     addLabel(n.label, 'zone', n.color, new THREE.Vector3((n.x + 70) * S, y + 0.1, (n.y + 10) * S), n.layer);
     continue;
   }
   const mat = new THREE.MeshStandardMaterial({ color: n.down ? '#2a2f3a' : n.color, roughness: 0.45, metalness: 0.15 });
+  nodeMats.set(n.id, { mat, color: mat.color.clone() });
   const m = new THREE.Mesh(geo(n.kind), mat);
   m.position.set(cx, y, cz); m.scale.set(n.w * S, Math.max(2, n.height) * S, n.h * S);
   m.castShadow = m.receiveShadow = true;
@@ -200,7 +214,7 @@ for (const e of Object.values(sc.edges)) {
   const pts = new THREE.Points(pg, new THREE.PointsMaterial({ map: dotTex, color: new THREE.Color(a.color).lerp(new THREE.Color('#fff'), 0.35), size: 0.42, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
   pts.visible = e.flow !== false;
   edgeGroup.add(line, arrow, pts);
-  edgeObjs.push({ a: a.layer, b: b.layer, objs: [line, arrow, pts], pts, curve, count, speed: (e.dashed ? 0.6 : 1) * 3 / len, flow: e.flow !== false });
+  edgeObjs.push({ id: e.id, a: a.layer, b: b.layer, objs: [line, arrow, pts], pts, curve, count, speed: (e.dashed ? 0.6 : 1) * 3 / len, flow: e.flow !== false, lineCol: lineCol.clone() });
   if (e.label) addLabel(e.label, 'edge', a.color, curve.getPoint(0.5).add(new THREE.Vector3(0, 0.25, 0)), a.layer, b.layer);
 }
 
@@ -231,9 +245,10 @@ const floorsEl = document.getElementById('floors');
 });
 function applyVisibility() {
   groups.forEach((g, id) => (g.visible = visible.has(id)));
-  for (const e of edgeObjs) { const on = visible.has(e.a) && visible.has(e.b); e.objs.forEach((o, i) => (o.visible = on && (i < 2 || (flowsOn && e.flow)))); }
+  for (const e of edgeObjs) { const on = visible.has(e.a) && visible.has(e.b); e.objs.forEach((o, i) => (o.visible = on && (i < 2 || (flowsOn && e.flow && !jv)))); }
 }
 let flowsOn = true;
+let jv = null; // shown journey: { j, step } (step -1 = whole path)
 const flowsBtn = document.getElementById('flows');
 flowsBtn.onclick = () => { flowsOn = !flowsOn; flowsBtn.classList.toggle('on', flowsOn); applyVisibility(); };
 const lblBtn = document.getElementById('edgelbl');
@@ -260,10 +275,100 @@ function go(i) {
   stopBtns.forEach((b, j) => b.classList.toggle('on', j === cur));
 }
 addEventListener('keydown', (e) => {
+  if (jv && e.key === 'Escape') return showJourney(null);
+  if (jv && (e.key === '[' || e.key === ']')) return stepJ(e.key === ']' ? 1 : -1);
   if (e.key === 'ArrowRight') go(cur + 1);
   else if (e.key === 'ArrowLeft') go(cur - 1);
   else if (/^[1-9]$/.test(e.key)) go(+e.key - 1);
 });
+
+// ---- journeys: named paths through the diagram, walked step by step ----
+const journeys = (sc.journeys || []).filter((j) => j.steps && j.steps.length);
+const edgeById = new Map(edgeObjs.map((e) => [e.id, e]));
+const FADE = new THREE.Color('#151922');
+const STEP_MS = 1100;
+const jGroup = new THREE.Group(); scene.add(jGroup);
+const token = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 12), new THREE.MeshBasicMaterial({ color: '#fff' }));
+token.visible = false; scene.add(token);
+const jEl = document.getElementById('journeys'), jbar = document.getElementById('jbar');
+const jBtns = journeys.map((j) => {
+  const b = document.createElement('button');
+  const dot = document.createElement('i'); dot.style.background = j.color;
+  b.append(dot, document.createTextNode(j.name));
+  b.onclick = () => showJourney(jv && jv.j === j ? null : j);
+  jEl.appendChild(b);
+  return b;
+});
+if (journeys.length) jEl.hidden = false;
+const ends = (st) => { const e = sc.edges[st.edge]; return e ? (st.back ? [e.to, e.from] : [e.from, e.to]) : null; };
+let jTimer = 0;
+function stopPlay() { clearInterval(jTimer); jTimer = 0; document.getElementById('jplay').textContent = '▶'; }
+function showJourney(j, step = -1) {
+  stopPlay();
+  jv = j ? { j, step } : null;
+  document.body.classList.toggle('journeying', !!jv);
+  jBtns.forEach((b, i) => b.classList.toggle('on', !!jv && journeys[i] === jv.j));
+  renderJourney();
+  applyVisibility();
+}
+function renderJourney() {
+  for (const c of jGroup.children) { c.geometry.dispose(); c.material.dispose(); }
+  jGroup.clear();
+  token.visible = false;
+  jbar.hidden = !jv;
+  const inJ = new Set(), stepsOf = new Map();
+  if (jv) jv.j.steps.forEach((st, k) => { const en = ends(st); if (en) { inJ.add(en[0]); inJ.add(en[1]); } (stepsOf.get(st.edge) || stepsOf.set(st.edge, []).get(st.edge)).push(k); });
+  nodeMats.forEach((m, id) => m.mat.color.copy(m.color).lerp(FADE, jv && !inJ.has(id) ? 0.8 : 0));
+  const jc = jv ? new THREE.Color(jv.j.color) : null;
+  for (const e of edgeObjs) {
+    const ks = stepsOf.get(e.id);
+    const c = e.lineCol.clone();
+    if (jv) { if (!ks) c.lerp(FADE, 0.75); else c.copy(jc); }
+    e.objs[0].material.color.copy(c); e.objs[1].material.color.copy(c);
+    if (jv && ks) {
+      const current = ks.includes(jv.step), reached = jv.step < 0 || ks.some((k) => k <= jv.step);
+      const tube = new THREE.Mesh(new THREE.TubeGeometry(e.curve, SEG * 2, current ? 0.075 : 0.05, 8),
+        new THREE.MeshBasicMaterial({ color: jc, transparent: true, opacity: current ? 0.95 : reached ? 0.6 : 0.18, depthWrite: false }));
+      jGroup.add(tube);
+    }
+  }
+  if (!jv) return;
+  token.material.color.copy(jc).lerp(new THREE.Color('#fff'), 0.45);
+  const n = jv.j.steps.length, k = jv.step;
+  document.getElementById('jname').textContent = jv.j.name;
+  document.getElementById('jname').style.color = jv.j.color;
+  const cap = document.getElementById('jcap');
+  cap.textContent = '';
+  if (k < 0) cap.textContent = n + ' steps · ▶ to walk through';
+  else {
+    const st = jv.j.steps[k], en = ends(st) || ['', ''];
+    const kk = document.createElement('span'); kk.className = 'k'; kk.style.color = jv.j.color; kk.textContent = (k + 1) + '/' + n + ' ';
+    cap.append(kk, document.createTextNode((sc.nodes[en[0]] || {}).label + ' → ' + (sc.nodes[en[1]] || {}).label));
+    if (st.note) { const no = document.createElement('span'); no.className = 'note'; no.textContent = ' · ' + st.note; cap.appendChild(no); }
+  }
+  document.getElementById('jprev').disabled = k < 0;
+  document.getElementById('jnext').disabled = k >= n - 1;
+}
+function stepJ(d) { if (!jv) return; const s = Math.max(-1, Math.min(jv.j.steps.length - 1, jv.step + d)); stopPlay(); jv.step = s; renderJourney(); }
+function moveToken(now) {
+  const j = jv.j, n = j.steps.length;
+  let k, t;
+  if (jv.step >= 0) { k = jv.step; t = (now % STEP_MS) / STEP_MS; }
+  else { const ph = now % (n * STEP_MS + 600); k = Math.floor(ph / STEP_MS); t = (ph - k * STEP_MS) / STEP_MS; }
+  const st = j.steps[k], e = st && edgeById.get(st.edge);
+  token.visible = !!e && e.objs[0].visible;
+  if (token.visible) e.curve.getPoint(st.back ? 1 - t : t, token.position);
+}
+document.getElementById('jprev').onclick = () => stepJ(-1);
+document.getElementById('jnext').onclick = () => stepJ(1);
+document.getElementById('jclose').onclick = () => showJourney(null);
+document.getElementById('jplay').onclick = () => {
+  if (!jv) return;
+  if (jTimer) return stopPlay();
+  if (jv.step < 0 || jv.step >= jv.j.steps.length - 1) { jv.step = 0; renderJourney(); }
+  document.getElementById('jplay').textContent = '❚❚';
+  jTimer = setInterval(() => { if (!jv || jv.step >= jv.j.steps.length - 1) return stopPlay(); jv.step++; renderJourney(); }, STEP_MS * 1.6);
+};
 
 // ---- loop ----
 function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
@@ -276,7 +381,8 @@ function frame(t) {
     if (k >= 1) tw = null;
   }
   controls.update();
-  if (flowsOn) for (const e of edgeObjs) {
+  if (jv) moveToken(t);
+  if (flowsOn && !jv) for (const e of edgeObjs) {
     if (!e.pts.visible) continue;
     const arr = e.pts.geometry.attributes.position;
     for (let i = 0; i < e.count; i++) { e.curve.getPoint(((t / 1000) * e.speed + i / e.count) % 1, proj); arr.setXYZ(i, proj.x, proj.y, proj.z); }

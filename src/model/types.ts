@@ -40,6 +40,24 @@ export interface Stop {
   name: string;
   pos: [number, number, number];
   target: [number, number, number];
+  /** Journey shown while this stop is active (presentations). */
+  journey?: string;
+}
+
+/** One hop of a journey: an existing connection, walked along its arrow or (`back`) against it, e.g. a response. */
+export interface JStep {
+  edge: string;
+  back?: boolean;
+  /** Caption for this hop, e.g. "POST /login". */
+  note?: string;
+}
+
+/** A user journey: a named, ordered path through the diagram ("Login", "Checkout"). */
+export interface Journey {
+  id: string;
+  name: string;
+  color: string;
+  steps: JStep[];
 }
 
 export interface Scene {
@@ -48,6 +66,7 @@ export interface Scene {
   edges: Record<string, SEdge>;
   layers: Layer[]; // index 0 = bottom floor
   stops: Stop[];
+  journeys: Journey[];
 }
 
 export interface KindDef {
@@ -79,6 +98,9 @@ export const PALETTE = [
   '#14b8a6', '#ec4899', '#94a3b8', '#64748b', '#e2e8f0',
 ];
 
+/** Journey colors: bright enough to read on top of the regular diagram colors. */
+export const JOURNEY_COLORS = ['#f472b6', '#facc15', '#38bdf8', '#4ade80', '#fb923c', '#c084fc'];
+
 export const uid = (p: string) => p + '_' + Math.random().toString(36).slice(2, 10);
 
 export function makeNode(kind: NodeKind, x: number, y: number, layer: string, over: Partial<SNode> = {}): SNode {
@@ -94,7 +116,7 @@ export function makeEdge(from: string, to: string, over: Partial<SEdge> = {}): S
 }
 
 export function emptyScene(): Scene {
-  return { v: 1, nodes: {}, edges: {}, layers: [{ id: uid('l'), name: 'Ground', visible: true }], stops: [] };
+  return { v: 1, nodes: {}, edges: {}, layers: [{ id: uid('l'), name: 'Ground', visible: true }], stops: [], journeys: [] };
 }
 
 export const isNodeId = (id: string) => id.startsWith('n_');

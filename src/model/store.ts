@@ -1,4 +1,5 @@
-import { emptyScene, isEdgeId, isNodeId, Scene, SNode } from './types';
+import { emptyScene, isEdgeId, isNodeId, Journey, Scene, SNode } from './types';
+import { findPath, journeyEnd, pruneJourneys, stepsToEdge } from './journeys';
 
 type Listener = () => void;
 
@@ -9,7 +10,14 @@ type Listener = () => void;
 export class Store {
   scene: Scene = emptyScene();
   selection = new Set<string>();
+  /** Layer new nodes go on; also the focused layer unless `allLayers`. */
   activeLayer: string;
+  /** "All layers" mode: nothing is dimmed and layer-scoped tools act on every visible layer. */
+  allLayers = false;
+  /** Journey on screen: `step` -1 = the whole path, k = focus on step k. View state, not undoable. */
+  journey: { id: string; step: number } | null = null;
+  /** Journey being recorded by clicking boxes; `from` = first clicked node while it has no steps yet. */
+  recording: { id: string; from: string | null } | null = null;
   private past: string[] = [];
   private future: string[] = [];
   private lastKey = '';
@@ -46,7 +54,21 @@ export class Store {
   update(fn: (s: Scene) => void, record: boolean | string = true) {
     if (record) this.checkpoint(typeof record === 'string' ? record : undefined);
     fn(this.scene);
+    this.tidyJourneys();
     this.emit();
+  }
+
+  /** Keep journeys consistent with the scene after any edit: drop dangling steps, clamp view state. */
+  private tidyJourneys() {
+    const s = this.scene;
+    s.journeys ??= [];
+    pruneJourneys(s);
+    if (this.journey) {
+      const j = s.journeys.find((x) => x.id === this.journey!.id);
+      if (!j) this.journey = null;
+      else if (this.journey.step >= j.steps.length) this.journey.step = j.steps.length ? j.steps.length - 1 : -1;
+    }
+    if (this.recording && !s.journeys.some((x) => x.id === this.recording!.id)) this.recording = null;
   }
 
   /** All-or-nothing update: if `fn` throws, the scene is restored and no history entry is left. */
@@ -60,6 +82,7 @@ export class Store {
       this.past.pop();
       throw e;
     } finally {
+      this.tidyJourneys();
       this.emit();
     }
   }
@@ -90,6 +113,7 @@ export class Store {
     this.lastKey = '';
     for (const id of [...this.selection]) if (!scene.nodes[id] && !scene.edges[id]) this.selection.delete(id);
     if (!scene.layers.some((l) => l.id === this.activeLayer)) this.activeLayer = scene.layers[scene.layers.length - 1].id;
+    this.tidyJourneys();
     this.emit();
   }
 
@@ -101,10 +125,102 @@ export class Store {
     this.emit();
   }
 
+  /** Change the insertion layer without leaving "All layers" mode. */
   setActiveLayer(id: string) {
     if (this.activeLayer === id) return;
     this.activeLayer = id;
     this.emit();
+  }
+
+  /** Focus one layer (dims the others), leaving "All layers" mode. */
+  focusLayer(id: string) {
+    if (this.activeLayer === id && !this.allLayers) return;
+    this.activeLayer = id;
+    this.allLayers = false;
+    this.emit();
+  }
+
+  setAllLayers(on: boolean) {
+    if (this.allLayers === on) return;
+    this.allLayers = on;
+    this.emit();
+  }
+
+  /** True if `layer` is in focus: the active layer, or any layer in "All layers" mode. */
+  inFocus(layer: string) {
+    return this.allLayers || layer === this.activeLayer;
+  }
+
+  // ---------- journeys ----------
+  journeyById(id: string | undefined | null): Journey | undefined {
+    return id ? this.scene.journeys.find((j) => j.id === id) : undefined;
+  }
+
+  get activeJourney(): Journey | undefined {
+    return this.journeyById(this.journey?.id);
+  }
+
+  /** Show a journey (step -1 = whole path) or hide journeys (null). */
+  setJourney(id: string | null, step = -1) {
+    const j = this.journeyById(id);
+    const next = j ? { id: j.id, step: Math.max(-1, Math.min(step, j.steps.length - 1)) } : null;
+    if (next?.id === this.journey?.id && next?.step === this.journey?.step) return;
+    this.journey = next;
+    if (this.recording && this.recording.id !== next?.id) this.recording = null;
+    this.emit();
+  }
+
+  startRecording(id: string) {
+    if (!this.journeyById(id)) return;
+    this.recording = { id, from: null };
+    this.journey = { id, step: -1 };
+    this.emit();
+  }
+
+  stopRecording() {
+    if (!this.recording) return;
+    this.recording = null;
+    this.emit();
+  }
+
+  /** Node where the next recorded hop starts (null until the first box is clicked). */
+  get recordingHead(): string | null {
+    const r = this.recording;
+    const j = this.journeyById(r?.id);
+    if (!r || !j) return null;
+    return journeyEnd(this.scene, j) ?? r.from;
+  }
+
+  /** Recording click on a node: extend the journey to it along existing connections. Returns an error message or null. */
+  recordNode(nodeId: string): string | null {
+    const r = this.recording;
+    const j = this.journeyById(r?.id);
+    if (!r || !j) return null;
+    const head = this.recordingHead;
+    if (!head) {
+      r.from = nodeId;
+      this.emit();
+      return null;
+    }
+    if (head === nodeId) return null;
+    const path = findPath(this.scene, head, nodeId, new Set(j.steps.map((st) => st.edge)));
+    const name = (id: string) => this.scene.nodes[id]?.label ?? '?';
+    if (!path) return `“${name(head)}” and “${name(nodeId)}” aren't connected. Draw a connection first.`;
+    this.update((s) => { s.journeys.find((x) => x.id === j.id)!.steps.push(...path); });
+    this.journey = { id: j.id, step: -1 };
+    this.emit();
+    return null;
+  }
+
+  /** Recording click on a connection: walk to it if needed, then along it. */
+  recordEdge(edgeId: string): string | null {
+    const r = this.recording;
+    const j = this.journeyById(r?.id);
+    if (!r || !j) return null;
+    const steps = stepsToEdge(this.scene, this.recordingHead, edgeId, new Set(j.steps.map((st) => st.edge)));
+    if (!steps) return "That connection can't be reached from where the journey ends.";
+    this.update((s) => { s.journeys.find((x) => x.id === j.id)!.steps.push(...steps); });
+    return null;
   }
 
   get selectedNodes(): SNode[] {

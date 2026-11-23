@@ -74,7 +74,7 @@ input, select, textarea { font: inherit; color: var(--text); }
 .layers, .tour { position: absolute; left: 12px; width: 220px; padding: 10px; }
 .layers { top: 70px; max-height: 40vh; overflow: auto; }
 .tour { bottom: 64px; max-height: 38vh; overflow: auto; }
-.inspector { position: absolute; right: 12px; top: 70px; width: 260px; padding: 12px; max-height: calc(100vh - 150px); overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.inspector { position: absolute; right: 12px; top: 70px; width: 260px; padding: 12px; max-height: calc(100vh - 106px - var(--jh, 0px)); overflow: auto; display: flex; flex-direction: column; gap: 10px; }
 h3 { margin: 0 0 4px; font-size: 13px; font-weight: 650; display: flex; align-items: center; gap: 7px; }
 h3 .icon { margin-left: auto; }
 h4 { margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
@@ -83,6 +83,9 @@ h4 { margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing
 .layer:hover { background: #1e2330; }
 .layer.on { background: rgba(110, 168, 255, 0.14); }
 .layer.off .name { opacity: 0.45; }
+.layer.all { margin-bottom: 2px; }
+.layer .icon-spacer { width: 24px; display: flex; justify-content: center; color: var(--muted); }
+.layer.target { box-shadow: inset 2px 0 0 var(--accent); }
 .layer .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer input.name { background: #0d1016; border: 1px solid var(--accent); border-radius: 5px; padding: 2px 5px; min-width: 0; }
 .layer .count, .layer .num { font-size: 11px; color: var(--muted); min-width: 16px; text-align: center; }
@@ -152,12 +155,67 @@ p { margin: 4px 0; }
 kbd { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: #0d1016; border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 6px; }
 
 /* presenting: chrome-free */
-.presenting .topbar, .presenting .layers, .presenting .inspector, .presenting .tour, .presenting .simpanel, .presenting .hint { display: none; }
+.presenting .topbar, .presenting .layers, .presenting .inspector, .presenting .tour, .presenting .simpanel, .presenting .hint, .presenting .journeys { display: none; }
+.presenting .journeybar { bottom: 80px; }
+
+/* ---------- journeys ---------- */
+.journeys { position: absolute; right: 12px; bottom: 12px; width: 280px; padding: 10px; max-height: 44vh; overflow: auto; }
+.journeys h3 { cursor: pointer; margin: 0; }
+.journeys h3 .count { font-size: 11px; color: var(--muted); font-weight: 500; }
+.journeys > p, .journeys > .layer:first-of-type { margin-top: 6px; }
+.jdot { width: 12px; height: 12px; border-radius: 50%; flex: none; border: 0; padding: 0; box-shadow: 0 0 0 2px rgba(255,255,255,0.06); }
+button.jdot { cursor: pointer; margin: 0 6px; }
+.jdot.sm { width: 8px; height: 8px; margin: 0 2px; }
+.recdot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); animation: blink 1s infinite; flex: none; }
+@keyframes blink { 50% { opacity: 0.25; } }
+.jsteps { margin: 2px 0 8px 10px; padding-left: 8px; border-left: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 2px; }
+.jstep { display: flex; align-items: flex-start; gap: 7px; padding: 4px; border-radius: 7px; cursor: pointer; }
+.jstep:hover { background: #1e2330; }
+.jstep.on { background: rgba(255, 255, 255, 0.07); }
+.jstep .num { flex: none; min-width: 18px; height: 18px; border-radius: 9px; display: grid; place-items: center; font-size: 10.5px; font-weight: 700; color: #0f1218; margin-top: 1px; }
+.jtext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.jhop { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jstep input.note { height: 22px; font-size: 11.5px; padding: 0 6px; border-color: transparent; background: transparent; color: var(--muted); }
+.jstep input.note:hover, .jstep input.note:focus { border-color: var(--line-2); background: #0d1016; color: var(--text); }
+.jstep .acts { display: none; }
+.jstep:hover .acts { display: flex; }
+.jhint { margin: 4px 2px; }
+.jbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.jbtns .btn { height: 30px; font-size: 12px; }
+.btn.rec { color: var(--danger); }
+.journeybar { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px;
+  max-width: min(720px, calc(100vw - 640px)); min-width: 320px; border-color: color-mix(in srgb, var(--jc) 45%, var(--line)); z-index: 5; }
+.journeybar .jname { white-space: nowrap; }
+.journeybar .jcap { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; padding: 0 4px; }
+.journeybar .jk { color: var(--jc); font-weight: 700; font-variant-numeric: tabular-nums; }
+.journeybar .jnote { color: var(--muted); }
+.journeybar .icon { width: 32px; height: 32px; }
+.journeybar .icon:disabled { opacity: 0.3; }
+.journeying .hint { display: none; }
 
 @media (max-width: 900px) {
+  .journeys { width: 220px; }
+  .journeybar { max-width: calc(100vw - 24px); bottom: 64px; }
   .brand { min-width: 0; }
   .brand { font-size: 0; }
   .layers, .tour { width: 180px; }
   .inspector { width: 220px; }
   .hint { display: none; }
 }
+
+/* About */
+button.brand { background: none; border: 0; cursor: pointer; font-family: inherit; }
+button.brand:hover { filter: brightness(1.15); }
+.about { width: min(520px, 92vw); padding: 18px 20px; line-height: 1.5; }
+.about h3 { display: flex; justify-content: space-between; align-items: center; margin: 0 0 10px; }
+.about-title { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 18px; }
+.about h4 { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.6px; opacity: 0.7; }
+.about p { margin: 6px 0; }
+.about .lead { font-size: 14px; }
+.about ul { margin: 8px 0; padding-left: 18px; }
+.about li { margin: 3px 0; }
+.about a { color: var(--accent); }
+.about-links { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 4px; }
+.about-links .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; text-decoration: none; }
+.about-links .btn:hover { background: rgba(255,255,255,0.05); }
+.about .fine { margin-top: 14px; font-size: 12px; opacity: 0.65; }

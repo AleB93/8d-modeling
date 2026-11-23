@@ -4,7 +4,7 @@ import type { Scene } from './types';
 let dbp: Promise<IDBDatabase> | null = null;
 function db() {
   return (dbp ??= new Promise((res, rej) => {
-    const r = indexedDB.open('stratos', 1);
+    const r = indexedDB.open('stratos', 1); // legacy name (pre-rename); kept so saved diagrams survive
     r.onupgradeneeded = () => r.result.createObjectStore('kv');
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -45,9 +45,13 @@ export async function decodeScene(code: string): Promise<Scene> {
 
 export function validateScene(s: any): Scene {
   if (!s || typeof s !== 'object' || !s.nodes || !s.edges || !Array.isArray(s.layers) || !s.layers.length) {
-    throw new Error('Not a Stratos scene');
+    throw new Error('Not an 8D modeling scene');
   }
   s.stops ??= [];
+  s.journeys = Array.isArray(s.journeys)
+    ? s.journeys.filter((j: any) => j && typeof j.id === 'string' && Array.isArray(j.steps))
+      .map((j: any) => ({ id: j.id, name: String(j.name ?? 'Journey'), color: String(j.color ?? '#f472b6'), steps: j.steps.filter((st: any) => st && s.edges[st.edge]) }))
+    : [];
   s.v = 1;
   return s as Scene;
 }

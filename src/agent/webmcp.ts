@@ -1,4 +1,4 @@
-// WebMCP adapter: exposes Stratos tools to in-browser AI agents via the page's model context.
+// WebMCP adapter: exposes 8D modeling tools to in-browser AI agents via the page's model context.
 //
 // Verified against Chrome 157 (chrome://flags/#enable-webmcp-testing): `document.modelContext` with
 // registerTool(tool, { signal }) (abort = unregister), getTools(), executeTool(registeredTool) and
@@ -100,7 +100,7 @@ export async function registerWebMCP(loadTools: () => Promise<ToolDef[]>): Promi
 
 /**
  * Round trip through the browser: ask the model context which tools it lists, then execute
- * stratos_get_scene via the browser (not our own function) and check the answer parses.
+ * modeling8d_get_scene via the browser (not our own function) and check the answer parses.
  */
 export async function selfTestWebMCP(): Promise<{ ok: boolean; message: string }> {
   const { mc } = findModelContext();
@@ -110,15 +110,15 @@ export async function selfTestWebMCP(): Promise<{ ok: boolean; message: string }
       return { ok: true, message: 'Tools registered (this browser version has no getTools/executeTool to test with).' };
     }
     const listed: any[] = await mc.getTools();
-    const ours = listed.filter((t) => String(t.name).startsWith('stratos_'));
-    if (!ours.length) return { ok: false, message: `The browser lists ${listed.length} tools, none from Stratos.` };
-    const probe = ours.find((t) => t.name === 'stratos_get_scene');
-    if (!probe) return { ok: false, message: 'stratos_get_scene is not listed by the browser.' };
+    const ours = listed.filter((t) => String(t.name).startsWith('modeling8d_'));
+    if (!ours.length) return { ok: false, message: `The browser lists ${listed.length} tools, none from 8D modeling.` };
+    const probe = ours.find((t) => t.name === 'modeling8d_get_scene');
+    if (!probe) return { ok: false, message: 'modeling8d_get_scene is not listed by the browser.' };
     const raw = await mc.executeTool(probe);
     const res = typeof raw === 'string' ? JSON.parse(raw) : raw;
     const n = Array.isArray(res?.nodes) ? res.nodes.length : null;
     if (n === null) return { ok: false, message: 'Test call returned an unexpected result.' };
-    return { ok: true, message: `WebMCP OK: browser lists ${ours.length} Stratos tools; test call read ${n} nodes.` };
+    return { ok: true, message: `WebMCP OK: browser lists ${ours.length} 8D modeling tools; test call read ${n} nodes.` };
   } catch (e) {
     return { ok: false, message: `WebMCP test failed: ${e instanceof Error ? e.message : String(e)}` };
   }
