@@ -158,8 +158,16 @@ export default function App() {
     setEditing(null);
     setMenu(false);
     if (!viewer) {
-      const { Viewer3D } = await import('../features/play3d/Viewer3D');
-      viewer = new Viewer3D(host3d, store, { onHover: setHover, onSim: setStats, onToast: toastMsg });
+      try {
+        const { Viewer3D } = await import('../features/play3d/Viewer3D');
+        viewer = new Viewer3D(host3d, store, { onHover: setHover, onSim: setStats, onToast: toastMsg });
+      } catch {
+        // Usually a new version was deployed while this tab was open, so the old 3D file is gone.
+        // The diagram is autosaved, so reloading is safe.
+        setBusy(false);
+        toastMsg('Couldn’t load the 3D view: 8D modeling may have been updated. Reload the page; your diagram is saved.');
+        return;
+      }
     }
     design.setActive(false);
     setMode('play');

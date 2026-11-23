@@ -5,6 +5,9 @@ import { render } from 'solid-js/web';
 import { installBrowserFakes } from '../test/browserFakes';
 import { store } from '../shared/appStore';
 
+// The 3D view is a separate file loaded on demand. Simulate it failing to load (e.g. a deploy replaced it).
+vi.mock('../features/play3d/Viewer3D', () => { throw new Error('Failed to fetch dynamically imported module'); });
+
 // Smoke test: mount the real app (2D editor + every panel) and drive the main UI paths.
 // Rendering itself (canvas pixels, WebGL) is out of scope; logic modules have their own unit tests.
 
@@ -129,6 +132,13 @@ describe('App shell', () => {
     nav.querySelector<HTMLButtonElement>('button[title="Close (Esc)"]')!.click();
     await tick();
     expect(nav.classList.contains('open')).toBe(false);
+  });
+
+  it('stays usable and says to reload when the 3D view fails to load', async () => {
+    byText('.seg button', 'Play 3D')!.click();
+    await until(() => $('.toast')?.textContent?.includes('Couldn’t load the 3D view'));
+    expect([...document.querySelectorAll<HTMLButtonElement>('.seg button')].map((b) => b.disabled)).toEqual([false, false]);
+    expect(byText('.seg button.on', 'Design')).toBeTruthy();
   });
 
   it('opens the menu and loads a new empty scene', async () => {
