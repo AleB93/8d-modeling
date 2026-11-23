@@ -4,7 +4,8 @@ import { DesignCanvas, Tool } from './design/DesignCanvas';
 import type { Viewer3D } from './play/Viewer3D';
 import type { SimResult } from './sim/sim';
 import { demoScene } from './model/demo';
-import { decodeScene, download, encodeScene, idbGet, idbSet, validateScene } from './model/persist';
+import { download, idbGet, idbSet, validateScene } from './model/persist';
+import { decodeShare, shareUrl, ShareView } from './model/share';
 import { emptyScene, KINDS, NodeKind, PALETTE, Scene, SEdge, SIM_KINDS, SNode, uid } from './model/types';
 import { Icon } from './ui/icons';
 import type { AgentUI } from './agent/tools';
@@ -76,23 +77,40 @@ export default function App() {
 
   onMount(async () => {
     design = new DesignCanvas(canvasEl, store, { onTool: setTool, onEditLabel: setEditing });
-    const m = location.hash.match(/^#s=(.+)$/);
-    let loaded = false;
-    if (m) {
-      try {
-        store.load(await decodeScene(m[1]));
+    let shared: Awaited<ReturnType<typeof decodeShare>> = null;
+    try {
+      shared = await decodeShare(location.hash);
+      if (shared) {
+        store.load(shared.scene);
         history.replaceState(null, '', location.pathname);
         toastMsg('Loaded shared scene');
-        loaded = true;
-      } catch {
-        toastMsg('That share link is invalid');
       }
+    } catch {
+      toastMsg('That share link is invalid');
     }
-    if (!loaded) {
+    if (!shared) {
       const saved = await idbGet<Scene>('scene').catch(() => undefined);
       try { store.load(saved ? validateScene(saved) : demoScene()); } catch { store.load(demoScene()); }
     }
     design.fit();
+    if (shared?.view) await applyView(shared.view);
+
+    // A share link pasted into an already-open tab only changes the hash (no reload), so load it here too.
+    const onHash = async () => {
+      try {
+        const sh = await decodeShare(location.hash);
+        if (!sh) return;
+        if (mode() === 'play') await toDesign();
+        replaceScene(sh.scene); // checkpointed: Ctrl+Z restores the previous scene
+        history.replaceState(null, '', location.pathname);
+        if (sh.view) await applyView(sh.view);
+        toastMsg('Loaded shared scene · Ctrl+Z to undo');
+      } catch {
+        toastMsg('That share link is invalid');
+      }
+    };
+    window.addEventListener('hashchange', onHash);
+    import.meta.hot?.dispose(() => window.removeEventListener('hashchange', onHash)); // after an await, onCleanup has no owner
 
     // ---- agent tools (WebMCP) ----
     const agentUI: AgentUI = {
@@ -108,6 +126,7 @@ export default function App() {
       setSimulation: (on) => { if (on !== simOn()) toggleSim(); },
       setFlows: (on) => { if (on !== flows()) toggleFlows(); },
       fit: () => design.fit(),
+      captureView,
     };
     const loadTools = async () => (await import('./agent/tools')).createTools(store, agentUI);
     const reg = await registerWebMCP(loadTools);
@@ -188,6 +207,38 @@ export default function App() {
     goStop(0);
   };
 
+  // ---------- share-link view state ----------
+  /** How you are looking at the scene right now, for share links. */
+  function captureView(): ShareView {
+    const v: ShareView = { mode: mode(), sim: simOn(), mult: mult(), flows: flows(), sel: [...store.selection] };
+    if (mode() === 'play' && viewer) {
+      const { pos, target } = viewer.captureStop('');
+      v.cam = { pos, target };
+      if (present() !== null) v.stop = present()!;
+    } else v.view2d = design.getView();
+    return v;
+  }
+
+  /** Restore a shared view on top of the already-loaded scene. Unknown ids and stops are ignored. */
+  async function applyView(v: ShareView) {
+    if ((v.flows ?? true) !== flows()) toggleFlows();
+    if (!!v.sim !== simOn()) toggleSim();
+    setMult(v.mult ?? 1);
+    if (viewer) viewer.sim.multiplier = mult();
+    const sc = store.scene;
+    store.select((v.sel ?? []).filter((id) => sc.nodes[id] || sc.edges[id]));
+    if (v.mode === 'play') {
+      await toPlay();
+      if (v.stop != null && sc.stops[v.stop]) {
+        setPresent(v.stop);
+        goStop(v.stop);
+      } else if (v.cam && viewer) await viewer.goTo({ id: '', name: '', ...v.cam });
+    } else {
+      if (mode() === 'play') await toDesign();
+      if (v.view2d) design.setView(v.view2d);
+    }
+  }
+
   // ---------- keyboard ----------
   const onKey = (e: KeyboardEvent) => {
     if (isTyping(e.target) || busy()) return;
@@ -233,6 +284,11 @@ export default function App() {
     demo: () => replaceScene(demoScene()),
     importJson: () => fileIn.click(),
     exportJson: () => download('system.stratos.json', new Blob([JSON.stringify(store.scene, null, 2)], { type: 'application/json' })),
+    exportHtml: async () => {
+      const { sceneToHtml } = await import('./export/html'); // lazy: pulls in three only for REVISION
+      download('system-3d.html', new Blob([sceneToHtml(store.scene)], { type: 'text/html' }));
+      toastMsg('Exported a standalone 3D viewer (needs internet to load three.js)');
+    },
     exportPng: async () => {
       if (mode() === 'play' && viewer) {
         const blob = await (await fetch(viewer.snapshot())).blob();
@@ -242,12 +298,11 @@ export default function App() {
         if (b) download('system-2d.png', b);
       }
     },
-    share: async () => {
-      const code = await encodeScene(store.scene);
-      const url = `${location.origin}${location.pathname}#s=${code}`;
+    share: async (withView: boolean) => {
+      const url = shareUrl(store.scene, withView ? captureView() : undefined);
       try {
         await navigator.clipboard.writeText(url);
-        toastMsg(`Share link copied (${(url.length / 1024).toFixed(1)} KB)`);
+        toastMsg(`${withView ? 'Share link with current view' : 'Share link (scene only)'} copied (${(url.length / 1024).toFixed(1)} KB)`);
       } catch {
         prompt('Copy this link', url);
       }
@@ -305,12 +360,25 @@ export default function App() {
                   : a().supported
                     ? `WebMCP found (${a().via}) but registration failed: ${a().error ?? 'unknown error'}`
                     : 'WebMCP not available in this browser (enable chrome://flags/#enable-webmcp-testing)';
+              const FLAG_URL = 'chrome://flags/#enable-webmcp-testing';
               const test = async () => {
+                if (!a().supported) {
+                  // Pages can't navigate to chrome:// URLs (Chrome blocks it), so copy the flag URL for the user to paste.
+                  const isChrome = /Chrome\//.test(navigator.userAgent);
+                  if (!isChrome) return toastMsg('WebMCP needs Chrome: open this page in Chrome and enable chrome://flags/#enable-webmcp-testing');
+                  try {
+                    await navigator.clipboard.writeText(FLAG_URL);
+                    toastMsg(`Copied ${FLAG_URL} — paste it in the address bar, set it to Enabled, then relaunch Chrome.`);
+                  } catch {
+                    toastMsg(`Open ${FLAG_URL} in the address bar, set it to Enabled, then relaunch Chrome.`);
+                  }
+                  return;
+                }
                 const { selfTestWebMCP } = await import('./agent/webmcp');
                 toastMsg((await selfTestWebMCP()).message);
               };
               return (
-                <button class={`agentpill panel ${state()}`} title={`${tip()}. Click to run a test call.`} data-webmcp={state()} onClick={test}>
+                <button class={`agentpill panel ${state()}`} title={`${tip()}. ${a().supported ? 'Click to run a test call.' : 'Click to copy the flag URL.'}`} data-webmcp={state()} onClick={test}>
                   <span class="adot" /> WebMCP
                 </button>
               );
@@ -325,9 +393,11 @@ export default function App() {
             <button class="icon panel" title="Menu" onClick={() => setMenu(!menu())}><Icon name="menu" /></button>
             <Show when={menu()}>
               <div class="menu panel" onClick={() => setMenu(false)}>
-                <button onClick={actions.share}>Copy share link</button>
+                <button onClick={() => actions.share(true)} title="Opens in the same mode, camera, tour stop, simulation and selection">Copy share link</button>
+                <button onClick={() => actions.share(false)}>Copy share link (scene only)</button>
                 <button onClick={actions.exportJson}>Export JSON</button>
                 <button onClick={actions.importJson}>Import JSON…</button>
+                <button onClick={actions.exportHtml}>Export HTML (3D viewer)</button>
                 <button onClick={actions.exportPng}>Export PNG ({mode() === 'play' ? '3D' : '2D'} view)</button>
                 <hr />
                 <button onClick={actions.demo}>Load demo system</button>

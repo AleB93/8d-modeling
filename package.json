@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start": "npm install && vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:webmcp": "node scripts/webmcp-check.mjs"
   },
   "dependencies": {
+    "@ab19993/zip-string": "0.1.0",
     "solid-js": "^1.9.20",
     "three": "^0.187.0"
   },

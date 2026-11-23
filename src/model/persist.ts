@@ -30,17 +30,10 @@ export async function idbSet(key: string, val: unknown) {
   });
 }
 
-// ---- Share links: deflate-raw + base64url in the URL hash, no server ----
+// ---- Legacy #s= share links (deflate-raw + base64url). New links: see share.ts; only decoding is kept. ----
 async function pipe(bytes: Uint8Array, t: CompressionStream | DecompressionStream) {
   const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(t);
   return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-export async function encodeScene(scene: Scene): Promise<string> {
-  const z = await pipe(new TextEncoder().encode(JSON.stringify(scene)), new CompressionStream('deflate-raw'));
-  let s = '';
-  for (let i = 0; i < z.length; i += 0x8000) s += String.fromCharCode(...z.subarray(i, i + 0x8000));
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 export async function decodeScene(code: string): Promise<Scene> {

@@ -5,7 +5,7 @@
 import type { Store } from '../model/store';
 import { KINDS, makeEdge, makeNode, NodeKind, Scene, SEdge, SNode, uid } from '../model/types';
 import { Simulation } from '../sim/sim';
-import { encodeScene } from '../model/persist';
+import { shareUrl, ShareView } from '../model/share';
 
 export interface AgentUI {
   setMode(m: 'design' | 'play'): Promise<void>;
@@ -13,6 +13,8 @@ export interface AgentUI {
   setSimulation(on: boolean): void;
   setFlows(on: boolean): void;
   fit(): void;
+  /** Current mode, camera, tour stop, simulation and selection, for share links. */
+  captureView(): ShareView;
 }
 
 export interface ToolDef {
@@ -467,10 +469,13 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
     {
       name: 'stratos_share_link',
       title: 'Get share link',
-      description: 'Get a URL that opens this exact diagram (the whole scene is compressed into the link; nothing is uploaded).',
-      inputSchema: { type: 'object', properties: {} },
+      description: 'Get a URL that opens this exact diagram (the whole scene is compressed into the link; nothing is uploaded). By default the link also restores the current view: 2D/3D mode, camera, tour stop, simulation and selection.',
+      inputSchema: {
+        type: 'object',
+        properties: { includeView: { type: 'boolean', default: true, description: 'false = scene only; the recipient opens it in the default view' } },
+      },
       annotations: { readOnlyHint: true },
-      execute: guard(async () => ({ url: `${location.origin}${location.pathname}#s=${await encodeScene(store.scene)}` })),
+      execute: guard(({ includeView = true }: { includeView?: boolean } = {}) => ({ url: shareUrl(store.scene, includeView ? ui.captureView() : undefined) })),
     },
   ];
 }
