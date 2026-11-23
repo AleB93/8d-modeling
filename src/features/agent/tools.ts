@@ -9,6 +9,7 @@ import { demoScene } from '../samples/demo';
 import { findPath, stepEnds } from '../journeys/journeys';
 import { Simulation } from '../simulation/sim';
 import { shareUrl, ShareView } from '../share/share';
+import { autoLayout } from '../../shared/model/layout';
 import { addPage, crossPageEdges, deletePage, ensurePages, layerLevels, layerPages, pageLayers, pagesOf } from '../../shared/model/pages';
 
 export interface AgentUI {
@@ -184,58 +185,6 @@ function edgeOut(s: Scene, e: SEdge) {
   };
 }
 
-/**
- * Layered layout: rank nodes by longest path from sources (clients/entry points first), then place each
- * floor as a block of rows, top floor first, so 2D reads top-down and 3D stacks cleanly.
- */
-export function autoLayout(s: Scene, onlyLayers?: Set<string>) {
-  const nodes = Object.values(s.nodes).filter((n) => n.kind !== 'zone' && n.kind !== 'text');
-  const ids = new Set(nodes.map((n) => n.id));
-  const outs = new Map<string, string[]>();
-  const indeg = new Map<string, number>(nodes.map((n) => [n.id, 0]));
-  for (const e of Object.values(s.edges)) {
-    if (!ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue;
-    (outs.get(e.from) ?? outs.set(e.from, []).get(e.from)!).push(e.to);
-    indeg.set(e.to, indeg.get(e.to)! + 1);
-  }
-  const rank = new Map<string, number>();
-  const q = nodes.filter((n) => indeg.get(n.id) === 0).map((n) => n.id);
-  for (const id of q) rank.set(id, 0);
-  const deg = new Map(indeg);
-  while (q.length) {
-    const id = q.shift()!;
-    for (const t of outs.get(id) ?? []) {
-      rank.set(t, Math.max(rank.get(t) ?? 0, rank.get(id)! + 1));
-      deg.set(t, deg.get(t)! - 1);
-      if (deg.get(t) === 0) q.push(t);
-    }
-  }
-  const maxRank = Math.max(0, ...rank.values());
-  for (const n of nodes) if (!rank.has(n.id)) rank.set(n.id, maxRank + 1); // nodes caught in cycles
-
-  const GX = 230, GY = 170, FLOOR_GAP = 120;
-  for (const page of pagesOf(s)) {
-  const layers = pageLayers(s, page.id);
-  let y = 0;
-  for (let li = layers.length - 1; li >= 0; li--) {
-    const layer = layers[li];
-    const ln = nodes.filter((n) => n.layer === layer.id);
-    if (!ln.length) continue;
-    const rows = [...new Set(ln.map((n) => rank.get(n.id)!))].sort((a, b) => a - b);
-    if (!onlyLayers || onlyLayers.has(layer.id)) {
-      rows.forEach((r, ri) => {
-        const row = ln.filter((n) => rank.get(n.id) === r).sort((a, b) => a.x - b.x || a.label.localeCompare(b.label));
-        row.forEach((n, i) => {
-          n.x = Math.round((i - (row.length - 1) / 2) * GX - n.w / 2);
-          n.y = Math.round(y + ri * GY + (GY - 40 - n.h) / 2);
-        });
-      });
-    }
-    y += rows.length * GY + FLOOR_GAP;
-  }
-  }
-}
-
 /** Default spot for a node added without coordinates: next free slot in a row under its floor's content. */
 function freeSlot(s: Scene, layer: string, w: number, h: number, placed: SNode[]) {
   const on = Object.values(s.nodes).filter((n) => n.layer === layer && !placed.includes(n));
@@ -246,6 +195,8 @@ function freeSlot(s: Scene, layer: string, w: number, h: number, placed: SNode[]
 }
 
 // ---------------------------------------------------------------- tools
+
+export { autoLayout };
 
 export function createTools(store: Store, ui: AgentUI): ToolDef[] {
   const resolveNode = (s: Scene, ref: unknown, refs?: Map<string, string>) => resolveNodeOn(s, ref, refs, store.activePage);

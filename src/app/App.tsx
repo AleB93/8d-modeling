@@ -4,7 +4,7 @@ import { DesignCanvas, Tool } from '../features/design/DesignCanvas';
 import { TOOLS } from '../features/design/toolbar';
 import type { Viewer3D } from '../features/play3d/Viewer3D';
 import type { SimResult } from '../features/simulation/sim';
-import { demoScene } from '../features/samples/demo';
+import { demoScene, isLegacyDemo } from '../features/samples/demo';
 import { download, idbGet, idbSet, validateScene } from '../features/persistence/persist';
 import { decodeShare, shareUrl, ShareView } from '../features/share/share';
 import { emptyScene, Scene, SIM_KINDS, Stop } from '../shared/model/types';
@@ -102,7 +102,8 @@ export default function App() {
     }
     if (!shared) {
       const saved = await idbGet<Scene>('scene').catch(() => undefined);
-      try { store.load(saved ? validateScene(saved) : demoScene()); } catch { store.load(demoScene()); }
+      // first visit, or a saved scene that is still the old demo, untouched: show the current demo
+      try { store.load(saved && !isLegacyDemo(saved) ? validateScene(saved) : demoScene()); } catch { store.load(demoScene()); }
     }
     design.fit();
     if (shared?.view) await applyView(shared.view);

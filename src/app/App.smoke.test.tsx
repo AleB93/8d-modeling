@@ -79,16 +79,16 @@ describe('App shell', () => {
   });
 
   it('lists the demo journeys and plays one, showing the caption bar', async () => {
-    const row = byText('.panel *', 'Place order')!;
+    const row = byText('.panel *', 'Place an order')!;
     expect(row).toBeTruthy();
     row.click();
     await tick();
-    expect(store.activeJourney?.name).toBe('Place order');
-    expect($('.journeybar')?.textContent).toContain('Place order');
+    expect(store.activeJourney?.name).toBe('Place an order');
+    expect($('.journeybar')?.textContent).toContain('Place an order');
     document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ']', bubbles: true }));
     await tick();
     expect(store.journey?.step).toBe(0); // the whole path was shown (-1); ] goes to the first step
-    expect($('.journeybar')?.textContent).toMatch(/\d+\s*\/\s*9/);
+    expect($('.journeybar')?.textContent).toMatch(/\d+\s*\/\s*8/);
   });
 
   it('switches layers to "All layers"', async () => {
@@ -115,13 +115,13 @@ describe('App shell', () => {
   it('mirrors the diagram in an accessible outline whose buttons select boxes', async () => {
     const nav = $('nav[aria-label="Diagram outline"]')!;
     expect(nav.textContent).toMatch(/Diagram with (\d+ pages, )?\d+ boxes/);
-    const api = byText('nav[aria-label="Diagram outline"] button', 'API #1')!;
+    const api = byText('nav[aria-label="Diagram outline"] button', 'Search')!;
     api.click();
     await tick();
-    expect(store.selectedNodes.map((n) => n.label)).toEqual(['API #1']);
-    byText('nav[aria-label="Diagram outline"] button', 'Show journey Browse')!.click();
+    expect(store.selectedNodes.map((n) => n.label)).toEqual(['Search']);
+    byText('nav[aria-label="Diagram outline"] button', 'Show journey Find')!.click();
     await tick();
-    expect(store.activeJourney?.name).toBe('Browse (mobile)');
+    expect(store.activeJourney?.name).toBe('Find a restaurant');
   });
 
   it('shows the outline as a Diagram list panel with O, and hides it with Esc', async () => {

@@ -1,6 +1,6 @@
 # 8D modeling — system architecture in 2D and 3D
 
-**▶ Try it live: [aleb93.github.io/8d-modeling](https://aleb93.github.io/8d-modeling/)**: it opens with a demo of three pages (Shop, Analytics, Payments).
+**▶ Try it live: [aleb93.github.io/8d-modeling](https://aleb93.github.io/8d-modeling/)**: it opens with *Dishdash*, a food-delivery platform on four pages (Ordering, Delivery, Payments, Analytics) with journeys, a 3D tour and a 2× load test to try. Seen the site before? **Menu → Load demo system**.
 
 Draw your architecture in 2D, press **Tab**, and it rises into 3D, where you can run traffic through it.
 Runs entirely in the browser: no server, no account.

@@ -7,6 +7,10 @@ import { Layer, Page, Scene, SNode, uid } from './types';
 export const DEFAULT_PAGE_ID = 'p_main';
 /** World px between neighbouring pages in 3D. */
 export const PAGE_GAP = 600;
+/** 3D units per world px. */
+export const WORLD_SCALE = 1 / 40;
+/** World px between stacked floors in 3D. */
+export const FLOOR_GAP = 260;
 
 export function pagesOf(s: Scene): Page[] {
   return s.pages?.length ? s.pages : [{ id: DEFAULT_PAGE_ID, name: 'Page 1' }];

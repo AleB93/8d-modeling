@@ -4,13 +4,13 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import type { Store } from '../../shared/model/store';
 import { isNodeId, Journey, KINDS, NodeKind, SNode, Stop, uid } from '../../shared/model/types';
 import { journeyEdges, journeyNodes, tokenAt } from '../journeys/journeys';
-import { layerLevels, layerShifts, pagePlacements, pagesOf, PagePlacement } from '../../shared/model/pages';
+import { FLOOR_GAP, layerLevels, layerShifts, pagePlacements, pagesOf, PagePlacement, WORLD_SCALE } from '../../shared/model/pages';
 import { Simulation, SimResult } from '../simulation/sim';
 import type { View2D } from '../design/DesignCanvas';
 
 /** World px → 3D units. */
-export const S = 1 / 40;
-const LAYER_GAP = 260; // world px between floors
+export const S = WORLD_SCALE;
+const LAYER_GAP = FLOOR_GAP; // world px between floors
 const SEG = 24; // samples per edge curve
 const MAX_PARTICLES = 30000;
 const SLOTS = 60; // particle slots per edge
