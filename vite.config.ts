@@ -12,6 +12,9 @@ export default defineConfig(({ command }) => ({
   build: { target: 'es2022', sourcemap: false, chunkSizeWarningLimit: 700 }, // three.js chunk is lazy-loaded
   test: {
     include: ['src/**/*.test.{ts,tsx}'],
+    // The *.hunt.test.ts files run hundreds of random scenes per test, and CI runners with coverage are
+    // several times slower than a laptop: the 5s default made deploys fail on correct code.
+    testTimeout: 30_000,
     coverage: {
       provider: 'v8',
       // Every logic module (.ts) must stay at 100%. Rendering and UI get smoke tests instead:
