@@ -1,5 +1,6 @@
 import { REVISION } from 'three';
 import type { Scene } from '../../shared/model/types';
+import { layerLevels, layerPages, layerShifts, pagesOf } from '../../shared/model/pages';
 
 // Standalone 3D viewer: one .html file with the scene embedded. three.js loads from jsDelivr at the
 // version this app ships, so the file needs a network connection to open, but nothing else.
@@ -7,9 +8,23 @@ import type { Scene } from '../../shared/model/types';
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
+/**
+ * The scene as the viewer draws it: pages side by side (node x shifted), each floor carrying its level
+ * within its page (`lv`) and, with several pages, a name that says which page it's on.
+ */
+function placed(scene: Scene): Scene {
+  const s: Scene = structuredClone(scene);
+  const dx = layerShifts(s), lv = layerLevels(s), lp = layerPages(s);
+  const pages = pagesOf(s);
+  const pageName = new Map(pages.map((p) => [p.id, p.name]));
+  for (const n of Object.values(s.nodes)) n.x += dx.get(n.layer) ?? 0;
+  s.layers = s.layers.map((l) => ({ ...l, lv: lv.get(l.id), ...(pages.length > 1 ? { name: `${pageName.get(lp.get(l.id)!)} · ${l.name}` } : {}) }));
+  return s;
+}
+
 export function sceneToHtml(scene: Scene, title = '8D modeling scene'): string {
   const ver = `0.${REVISION.replace(/\D/g, '')}.0`;
-  const data = JSON.stringify(scene).replace(/</g, '\\u003c');
+  const data = JSON.stringify(placed(scene)).replace(/</g, '\\u003c');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -82,7 +97,7 @@ const { RoundedBoxGeometry } = await import('three/addons/geometries/RoundedBoxG
 
 const S = 1 / 40, GAP = 260, SEG = 24;
 const sc = JSON.parse(document.getElementById('scene').textContent);
-const layerIdx = new Map(sc.layers.map((l, i) => [l.id, i]));
+const layerIdx = new Map(sc.layers.map((l, i) => [l.id, l.lv ?? i]));
 const baseY = (n) => (layerIdx.get(n.layer) ?? 0) * GAP * S;
 const visible = new Set(sc.layers.filter((l) => l.visible !== false).map((l) => l.id));
 
@@ -104,9 +119,9 @@ scene.add(new THREE.HemisphereLight('#cfd8ff', '#1a1d26', 1.1));
 const sun = new THREE.DirectionalLight('#ffffff', 2.4);
 sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.02; sun.shadow.intensity = 0.45;
 scene.add(sun, sun.target);
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(800, 800), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1 }));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1 }));
 ground.rotation.x = -Math.PI / 2; ground.position.y = -0.02; ground.receiveShadow = true;
-const grid = new THREE.GridHelper(800, 400, '#252c3a', '#171c26');
+const grid = new THREE.GridHelper(3000, 1500, '#252c3a', '#171c26');
 grid.material.transparent = true; grid.material.opacity = 0.7;
 scene.add(ground, grid);
 
@@ -168,7 +183,8 @@ for (const n of Object.values(sc.nodes)) {
 }
 
 // floor slabs (all floors above the ground one)
-sc.layers.forEach((l, i) => {
+sc.layers.forEach((l) => {
+  const i = layerIdx.get(l.id);
   if (i === 0) return;
   const ns = Object.values(sc.nodes).filter((n) => n.layer === l.id);
   if (!ns.length) return;

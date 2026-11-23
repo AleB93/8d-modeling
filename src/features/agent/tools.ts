@@ -9,6 +9,7 @@ import { demoScene } from '../samples/demo';
 import { findPath, stepEnds } from '../journeys/journeys';
 import { Simulation } from '../simulation/sim';
 import { shareUrl, ShareView } from '../share/share';
+import { addPage, crossPageEdges, deletePage, ensurePages, layerLevels, layerPages, pageLayers, pagesOf } from '../../shared/model/pages';
 
 export interface AgentUI {
   setMode(m: 'design' | 'play'): Promise<void>;
@@ -55,24 +56,73 @@ class ToolError extends Error {}
 
 const ok = (data: unknown) => JSON.stringify(data);
 
+/** A finite number from a number or numeric string, else a clear error. */
+function num(v: unknown, what: string, min = -Infinity): number {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isFinite(n)) throw new ToolError(`${what} must be a number (got ${JSON.stringify(v)})`);
+  if (n < min) throw new ToolError(`${what} must be ≥ ${min} (got ${n})`);
+  return n;
+}
+
+/** A non-empty array of objects, else a clear error. */
+function list<T = any>(v: unknown, what: string): T[] {
+  if (!Array.isArray(v) || !v.length) throw new ToolError(`${what} must be a non-empty array`);
+  v.forEach((x, i) => { if (!x || typeof x !== 'object') throw new ToolError(`${what}[${i}] must be an object`); });
+  return v;
+}
+
+/** Own-property lookup, so labels like "constructor" never hit Object.prototype. */
+const own = <T>(rec: Record<string, T>, k: string): T | undefined => (Object.hasOwn(rec, k) ? rec[k] : undefined);
+
 // ---------------------------------------------------------------- helpers
 
-function resolveLayer(store: Store, s: Scene, ref: string | undefined, created: string[]): string {
-  if (!ref) return store.activeLayer;
-  const hit = s.layers.find((l) => l.id === ref) ?? s.layers.find((l) => l.name.toLowerCase() === ref.toLowerCase());
+/** A floor of the open page by name, or any floor by id. */
+function findLayer(store: Store, s: Scene, ref: unknown) {
+  const r = String(ref);
+  return s.layers.find((l) => l.id === r) ?? pageLayers(s, store.activePage).find((l) => String(l.name).toLowerCase() === r.toLowerCase());
+}
+
+function resolveLayer(store: Store, s: Scene, ref: unknown, created: string[]): string {
+  if (ref == null || ref === '') return store.activeLayer;
+  const hit = findLayer(store, s, ref);
   if (hit) return hit.id;
-  const l = { id: uid('l'), name: ref, visible: true };
-  s.layers.push(l); // new layers go on top
-  created.push(ref);
+  const l = { id: uid('l'), name: String(ref), visible: true, ...(s.pages?.length ? { page: store.activePage } : {}) };
+  s.layers.push(l); // new layers go on top of the open page
+  created.push(l.name);
   return l.id;
 }
 
-/** Accepts a node id, a `ref` from the same call, or an exact (case-insensitive) label. */
-function resolveNode(s: Scene, ref: string, refs?: Map<string, string>): SNode {
-  if (s.nodes[ref]) return s.nodes[ref];
+function resolvePage(s: Scene, ref: unknown) {
+  const ps = pagesOf(s);
+  const k = typeof ref === 'number' || /^\d+$/.test(String(ref)) ? Number(ref) - 1 : -1;
+  const p = ps[k] ?? ps.find((x) => x.id === ref || x.name.toLowerCase() === String(ref).toLowerCase());
+  if (!p) throw new ToolError(`No page "${ref}" (have: ${ps.map((x) => x.name).join(', ')})`);
+  return p;
+}
+
+/** Pages are independent diagrams: refuse connections between them. */
+function assertSamePage(s: Scene) {
+  const bad = crossPageEdges(s)[0];
+  if (bad) throw new ToolError(`"${s.nodes[bad.from].label}" and "${s.nodes[bad.to].label}" are on different pages; pages are separate diagrams and can't be connected`);
+}
+
+function floorsOut(store: Store) {
+  const s = store.scene;
+  return pageLayers(s, store.activePage).map((l, i) => ({ name: l.name, floor: i, visible: l.visible }));
+}
+
+/** Accepts a node id, a `ref` from the same call, or an exact (case-insensitive) label, preferring boxes on `page`. */
+function resolveNodeOn(s: Scene, input: unknown, refs: Map<string, string> | undefined, page: string): SNode {
+  if (input == null || input === '') throw new ToolError('Missing node (give an id, ref or label)');
+  const ref = String(input);
+  const byId = own(s.nodes, ref);
+  if (byId) return byId;
   const fromRef = refs?.get(ref);
-  if (fromRef && s.nodes[fromRef]) return s.nodes[fromRef];
-  const matches = Object.values(s.nodes).filter((n) => n.label.toLowerCase() === ref.toLowerCase());
+  if (fromRef && own(s.nodes, fromRef)) return s.nodes[fromRef];
+  const all = Object.values(s.nodes).filter((n) => String(n.label).toLowerCase() === ref.toLowerCase());
+  const lp = layerPages(s);
+  const here = all.filter((n) => lp.get(n.layer) === page);
+  const matches = here.length ? here : all;
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) throw new ToolError(`"${ref}" matches ${matches.length} nodes (${matches.map((m) => m.id).join(', ')}); use an id`);
   throw new ToolError(`No node "${ref}"`);
@@ -87,8 +137,10 @@ function resolveJourney(s: Scene, ref: string): Journey {
 }
 
 /** start + hops ("go to X, then Y") → steps, following existing connections (backwards for responses). */
-function journeySteps(s: Scene, start: string, hops: { to: string; note?: string }[]): JStep[] {
+function journeySteps(s: Scene, start: unknown, hops: { to: string; note?: string }[], page: string): JStep[] {
+  const resolveNode = (sc: Scene, ref: unknown) => resolveNodeOn(sc, ref, undefined, page);
   if (!Array.isArray(hops) || !hops.length) throw new ToolError('steps must list at least one hop');
+  list(hops, 'steps');
   let cur = resolveNode(s, start).id;
   const out: JStep[] = [];
   for (const h of hops) {
@@ -162,9 +214,11 @@ export function autoLayout(s: Scene, onlyLayers?: Set<string>) {
   for (const n of nodes) if (!rank.has(n.id)) rank.set(n.id, maxRank + 1); // nodes caught in cycles
 
   const GX = 230, GY = 170, FLOOR_GAP = 120;
+  for (const page of pagesOf(s)) {
+  const layers = pageLayers(s, page.id);
   let y = 0;
-  for (let li = s.layers.length - 1; li >= 0; li--) {
-    const layer = s.layers[li];
+  for (let li = layers.length - 1; li >= 0; li--) {
+    const layer = layers[li];
     const ln = nodes.filter((n) => n.layer === layer.id);
     if (!ln.length) continue;
     const rows = [...new Set(ln.map((n) => rank.get(n.id)!))].sort((a, b) => a - b);
@@ -178,6 +232,7 @@ export function autoLayout(s: Scene, onlyLayers?: Set<string>) {
       });
     }
     y += rows.length * GY + FLOOR_GAP;
+  }
   }
 }
 
@@ -193,6 +248,7 @@ function freeSlot(s: Scene, layer: string, w: number, h: number, placed: SNode[]
 // ---------------------------------------------------------------- tools
 
 export function createTools(store: Store, ui: AgentUI): ToolDef[] {
+  const resolveNode = (s: Scene, ref: unknown, refs?: Map<string, string>) => resolveNodeOn(s, ref, refs, store.activePage);
   const guard = (fn: (input: any) => Promise<unknown> | unknown) => async (input: any) => {
     // agents may send arguments as a JSON string
     if (typeof input === 'string') {
@@ -219,13 +275,16 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       name: 'modeling8d_get_scene',
       title: 'Read diagram',
       description:
-        'Read the current 8D modeling system diagram: floors (layers, index 0 = bottom), nodes (services, databases, queues, caches, load balancers, clients, zones, text) and directed connections. Call this before editing.',
+        'Read the current 8D modeling system diagram: pages (independent diagrams; the open one is where edits go), floors (layers; floor 0 = bottom of its page), nodes (services, databases, queues, caches, load balancers, clients, zones, text) and directed connections. Call this before editing.',
       inputSchema: { type: 'object', properties: {} },
       annotations: { readOnlyHint: true },
       execute: guard(() => {
         const s = store.scene;
+        const lp = layerPages(s), lv = layerLevels(s);
+        const pageName = new Map(pagesOf(s).map((p) => [p.id, p.name]));
         return {
-          layers: s.layers.map((l, i) => ({ id: l.id, name: l.name, floor: i, visible: l.visible })),
+          pages: pagesOf(s).map((p) => ({ id: p.id, name: p.name, ...(p.id === store.activePage ? { open: true } : {}), floors: pageLayers(s, p.id).length })),
+          layers: s.layers.map((l) => ({ id: l.id, name: l.name, page: pageName.get(lp.get(l.id)!), floor: lv.get(l.id), visible: l.visible })),
           nodes: Object.values(s.nodes).map((n) => nodeOut(s, n)),
           edges: Object.values(s.edges).map((e) => edgeOut(s, e)),
           tourStops: s.stops.map((t) => t.name),
@@ -256,7 +315,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
         required: ['nodes'],
       },
       execute: guard(({ nodes }: { nodes: any[] }) => {
-        if (!Array.isArray(nodes) || !nodes.length) throw new ToolError('nodes must be a non-empty array');
+        list(nodes, 'nodes');
         const created: SNode[] = [];
         const newLayers: string[] = [];
         const refs: Record<string, string> = {};
@@ -266,14 +325,15 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
             const kind = spec.kind as NodeKind;
             const layer = resolveLayer(store, s, spec.layer, newLayers);
             const d = KINDS[kind];
-            const w = spec.w ?? d.w, h = spec.h ?? d.h;
-            const pos = spec.x != null && spec.y != null ? { x: spec.x, y: spec.y } : freeSlot(s, layer, w, h, created);
+            const w = spec.w != null ? num(spec.w, 'w', 1) : d.w, h = spec.h != null ? num(spec.h, 'h', 1) : d.h;
+            const pos = spec.x != null && spec.y != null ? { x: num(spec.x, 'x'), y: num(spec.y, 'y') } : freeSlot(s, layer, w, h, created);
             const n = makeNode(kind, pos.x, pos.y, layer, {
-              label: String(spec.label), w, h,
-              ...(spec.height != null && { height: spec.height }),
-              ...(spec.color && { color: spec.color }),
-              ...(spec.capacity != null && { capacity: spec.capacity }),
-              ...(spec.latency != null && { latency: spec.latency }),
+              w, h,
+              ...(spec.label != null && { label: String(spec.label) }),
+              ...(spec.height != null && { height: num(spec.height, 'height', 0) }),
+              ...(spec.color && { color: String(spec.color) }),
+              ...(spec.capacity != null && { capacity: num(spec.capacity, 'capacity', 0) }),
+              ...(spec.latency != null && { latency: num(spec.latency, 'latency', 0) }),
             });
             if (kind === 'zone') s.nodes = { [n.id]: n, ...s.nodes };
             else s.nodes[n.id] = n;
@@ -311,7 +371,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
         required: ['edges'],
       },
       execute: guard(({ edges, refs }: { edges: any[]; refs?: Record<string, string> }) => {
-        if (!Array.isArray(edges) || !edges.length) throw new ToolError('edges must be a non-empty array');
+        list(edges, 'edges');
         const refMap = new Map(Object.entries(refs ?? {}));
         const made: SEdge[] = [];
         const skipped: string[] = [];
@@ -319,8 +379,10 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
           for (const spec of edges) {
             const a = resolveNode(s, String(spec.from), refMap), b = resolveNode(s, String(spec.to), refMap);
             if (a.id === b.id) { skipped.push(`${a.label} → itself`); continue; }
+            const lp = layerPages(s);
+            if (lp.get(a.layer) !== lp.get(b.layer)) throw new ToolError(`"${a.label}" and "${b.label}" are on different pages; pages are separate diagrams and can't be connected`);
             if (Object.values(s.edges).some((e) => e.from === a.id && e.to === b.id)) { skipped.push(`${a.label} → ${b.label} (exists)`); continue; }
-            const e = makeEdge(a.id, b.id, { label: spec.label ?? '', mult: spec.mult ?? 1, dashed: !!spec.async });
+            const e = makeEdge(a.id, b.id, { label: spec.label != null ? String(spec.label) : '', mult: spec.mult != null ? num(spec.mult, 'mult', 0) : 1, dashed: !!spec.async });
             s.edges[e.id] = e;
             made.push(e);
           }
@@ -354,23 +416,28 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
         required: ['updates'],
       },
       execute: guard(({ updates }: { updates: any[] }) => {
+        list(updates, 'updates');
         const changed: string[] = [];
         const newLayers: string[] = [];
         store.transact((s) => {
           for (const u of updates) {
-            const e = s.edges[u.target];
+            const e = own(s.edges, String(u.target));
             if (e) {
               if (u.label != null) e.label = String(u.label);
-              if (u.mult != null) e.mult = Math.max(0, +u.mult);
+              if (u.mult != null) e.mult = num(u.mult, 'mult', 0);
               if (u.async != null) e.dashed = !!u.async;
               if (u.from != null) e.from = resolveNode(s, u.from).id;
               if (u.to != null) e.to = resolveNode(s, u.to).id;
+              if (e.from === e.to) throw new ToolError(`A connection can't go from "${s.nodes[e.from].label}" to itself`);
+              if (Object.values(s.edges).some((x) => x !== e && x.from === e.from && x.to === e.to))
+                throw new ToolError(`"${s.nodes[e.from].label}" → "${s.nodes[e.to].label}" already exists`);
               changed.push(e.id);
               continue;
             }
-            const n = resolveNode(s, String(u.target));
+            const n = resolveNode(s, u.target);
+            const mins: Record<string, number> = { w: 1, h: 1, height: 0, capacity: 0, latency: 0 };
             for (const k of ['label', 'x', 'y', 'w', 'h', 'height', 'color', 'capacity', 'latency'] as const) {
-              if (u[k] != null) (n as any)[k] = k === 'label' || k === 'color' ? String(u[k]) : +u[k];
+              if (u[k] != null) (n as any)[k] = k === 'label' || k === 'color' ? String(u[k]) : num(u[k], k, mins[k]);
             }
             if (u.kind != null) {
               if (!NODE_KINDS.includes(u.kind)) throw new ToolError(`Unknown kind "${u.kind}"`);
@@ -380,6 +447,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
             if (u.layer != null) n.layer = resolveLayer(store, s, u.layer, newLayers);
             changed.push(n.id);
           }
+          assertSamePage(s);
         });
         return { changed, newLayers };
       }),
@@ -390,8 +458,9 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       description: 'Delete nodes (by id or exact label, their connections go too) and/or connections (by edge id). Undoable.',
       inputSchema: { type: 'object', properties: { targets: { type: 'array', items: { type: 'string' }, minItems: 1 } }, required: ['targets'] },
       execute: guard(({ targets }: { targets: string[] }) => {
+        if (!Array.isArray(targets) || !targets.length) throw new ToolError('targets must be a non-empty array');
         const s = store.scene;
-        const ids = targets.map((t) => (s.edges[t] ? t : resolveNode(s, t).id));
+        const ids = [...new Set(targets.map((t) => (own(s.edges, String(t)) ? String(t) : resolveNode(s, t).id)))];
         store.select(ids);
         store.deleteSelection();
         return { deleted: ids.length };
@@ -401,8 +470,8 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       name: 'modeling8d_layers',
       title: 'Manage floors',
       description:
-        'Manage floors. Actions: add (names, appended on top), rename (target, name), reorder (names bottom→top, all floors), show/hide (target), ' +
-        'delete (target; it must be empty unless deleteNodes is true; the last floor can\'t be deleted), focus (target, or "all" to stop dimming other floors).',
+        'Manage the floors of the open page (see modeling8d_pages). Actions: add (names, appended on top), rename (target, name), reorder (names bottom→top, every floor of the page), show/hide (target), ' +
+        'delete (target; it must be empty unless deleteNodes is true; a page\'s last floor can\'t be deleted), focus (target, or "all" to stop dimming other floors).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -418,7 +487,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
         if (action === 'focus') {
           if (String(target).toLowerCase() === 'all') store.setAllLayers(true);
           else {
-            const l = store.scene.layers.find((x) => x.id === target || x.name.toLowerCase() === String(target).toLowerCase());
+            const l = findLayer(store, store.scene, target);
             if (!l) throw new ToolError(`No layer "${target}"`);
             store.focusLayer(l.id);
           }
@@ -426,16 +495,24 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
         }
         store.transact((s) => {
           const find = (r: string) => {
-            const l = s.layers.find((x) => x.id === r || x.name.toLowerCase() === String(r).toLowerCase());
+            const l = findLayer(store, s, r);
             if (!l) throw new ToolError(`No layer "${r}"`);
             return l;
           };
-          if (action === 'add') for (const nm of names ?? []) s.layers.push({ id: uid('l'), name: nm, visible: true });
-          else if (action === 'rename') find(target).name = String(name);
+          const page = store.activePage;
+          const onPage = pageLayers(s, page);
+          if (action === 'add') {
+            if (names != null && !Array.isArray(names)) throw new ToolError('names must be an array of floor names');
+            for (const nm of names ?? []) s.layers.push({ id: uid('l'), name: String(nm), visible: true, ...(s.pages?.length ? { page } : {}) });
+          } else if (action === 'rename') {
+            if (name == null || String(name).trim() === '') throw new ToolError('rename needs `name`');
+            find(target).name = String(name);
+          }
           else if (action === 'show' || action === 'hide') find(target).visible = action === 'show';
           else if (action === 'delete') {
             const l = find(target);
-            if (s.layers.length === 1) throw new ToolError('Can\'t delete the only floor');
+            const own = pageLayers(s, layerPages(s).get(l.id)!);
+            if (own.length === 1) throw new ToolError('Can\'t delete the only floor of a page');
             const on = Object.values(s.nodes).filter((n) => n.layer === l.id);
             if (on.length && !deleteNodes) throw new ToolError(`Floor "${l.name}" has ${on.length} ${on.length === 1 ? 'box' : 'boxes'}; pass deleteNodes: true to delete them too, or move them first`);
             for (const n of on) delete s.nodes[n.id];
@@ -443,12 +520,14 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
             s.layers = s.layers.filter((x) => x.id !== l.id);
           }
           else if (action === 'reorder') {
-            const order = (names ?? []).map(find);
-            if (order.length !== s.layers.length) throw new ToolError('reorder needs every layer name exactly once, bottom → top');
-            s.layers = order;
+            const order = (Array.isArray(names) ? names : []).map(find);
+            if (order.length !== onPage.length || new Set(order).size !== order.length || order.some((l: any) => !onPage.includes(l)))
+              throw new ToolError('reorder needs every floor of the open page exactly once, bottom → top');
+            const slots = onPage.map((l) => s.layers.indexOf(l));
+            slots.forEach((k, i) => { s.layers[k] = order[i]; });
           } else throw new ToolError(`Unknown action "${action}"`);
         });
-        return { layers: store.scene.layers.map((l, i) => ({ name: l.name, floor: i, visible: l.visible })) };
+        return { page: pagesOf(store.scene).find((p) => p.id === store.activePage)!.name, layers: floorsOut(store) };
       }),
     },
     {
@@ -458,7 +537,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       inputSchema: { type: 'object', properties: { layers: { type: 'array', items: { type: 'string' } } } },
       execute: guard(({ layers }: { layers?: string[] }) => {
         const find = (r: string) => {
-          const l = store.scene.layers.find((x) => x.id === r || x.name.toLowerCase() === r.toLowerCase());
+          const l = findLayer(store, store.scene, r);
           if (!l) throw new ToolError(`No layer "${r}"`);
           return l.id;
         };
@@ -485,9 +564,11 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       annotations: { readOnlyHint: true },
       execute: guard(({ multiplier = 1, seconds = 10, down = [] }: { multiplier?: number; seconds?: number; down?: string[] }) => {
         const s: Scene = structuredClone(store.scene);
+        if (!Array.isArray(down)) throw new ToolError('down must be an array of node ids or labels');
         for (const r of down) resolveNode(s, r).down = true;
         const sim = new Simulation();
-        sim.multiplier = multiplier;
+        sim.multiplier = num(multiplier, 'multiplier', 0);
+        seconds = num(seconds, 'seconds'); // clamped to 0.1…600 below
         const vis = new Set(s.layers.filter((l) => l.visible).map((l) => l.id));
         const steps = Math.min(6000, Math.max(1, Math.round(seconds / 0.1)));
         let r = sim.step(s, 0.1, vis);
@@ -530,15 +611,16 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
         },
       },
       execute: guard(async ({ mode, simulate, flows, focus, fit, overview, multiplier }: any) => {
+        // validate everything before changing anything
+        if (mode != null && mode !== 'design' && mode !== 'play') throw new ToolError('mode must be "design" or "play"');
+        const mult = multiplier != null ? num(multiplier, 'multiplier', 0) : null;
+        const target = focus != null && focus !== '' ? resolveNode(store.scene, focus).id : null;
         if (mode) await ui.setMode(mode);
         if (simulate != null) ui.setSimulation(!!simulate);
         if (flows != null) ui.setFlows(!!flows);
-        if (multiplier != null) {
-          if (!(Number(multiplier) >= 0)) throw new ToolError('multiplier must be a number ≥ 0');
-          ui.setMultiplier(Number(multiplier));
-        }
+        if (mult != null) ui.setMultiplier(mult);
         if (overview) await ui.overview();
-        if (focus) ui.focus(resolveNode(store.scene, focus).id);
+        if (target) ui.focus(target);
         if (fit) ui.fit();
         return { ok: true };
       }),
@@ -575,7 +657,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
             return { journeys: s.journeys.map((j) => journeyOut(s, j)) };
           case 'create': {
             if (!start) throw new ToolError('create needs `start` and `steps`');
-            const built = journeySteps(s, start, steps);
+            const built = journeySteps(s, start, steps, store.activePage);
             const used = new Set(s.journeys.map((j) => j.color));
             const j: Journey = {
               id: uid('j'), name: name || `Journey ${s.journeys.length + 1}`,
@@ -588,7 +670,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
           }
           case 'update': {
             const j = resolveJourney(s, id);
-            const built = steps ? journeySteps(s, start ?? (() => { throw new ToolError('Replacing steps needs `start`'); })(), steps) : null;
+            const built = steps ? journeySteps(s, start ?? (() => { throw new ToolError('Replacing steps needs `start`'); })(), steps, store.activePage) : null;
             store.update((sc) => {
               const x = sc.journeys.find((y) => y.id === j.id)!;
               if (name) x.name = name;
@@ -748,11 +830,17 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       },
       execute: guard(async ({ action, scene, format = 'json' }: any) => {
         const replace = (next: Scene) => {
-          store.checkpoint();
-          store.load(next, false);
+          const mark = store.historyMark();
+          try {
+            store.checkpoint();
+            store.load(next, false);
+          } catch (e) {
+            store.rollback(mark);
+            throw new ToolError(`Invalid scene: ${(e as Error).message}`);
+          }
           store.select([]);
           ui.fit();
-          return { nodes: Object.keys(next.nodes).length, edges: Object.keys(next.edges).length, floors: next.layers.length };
+          return { pages: pagesOf(next).length, nodes: Object.keys(next.nodes).length, edges: Object.keys(next.edges).length, floors: next.layers.length };
         };
         switch (action) {
           case 'new':
@@ -768,6 +856,77 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
             if (format === 'json') return { scene: store.scene };
             if (format !== 'html' && format !== 'png') throw new ToolError(`Unknown format "${format}"`);
             return { downloaded: await ui.exportFile(format) };
+          default:
+            throw new ToolError(`Unknown action "${action}"`);
+        }
+      }),
+    },
+    {
+      name: 'modeling8d_pages',
+      title: 'Pages',
+      description:
+        'Manage pages: independent diagrams in one scene, each with its own floors and boxes (e.g. "Production", "Staging", "Data pipeline"). The 2D editor shows the open page; 3D shows every page side by side on the ground. ' +
+        'Adding boxes, floors and journeys acts on the open page, and connections can\'t cross pages. ' +
+        'Actions: list (read), add (name; creates it with one floor "Ground" and opens it), open (target), rename (target, name), delete (target; also deletes its boxes), reorder (names, every page once; order left → right in 3D). ' +
+        'A `target` is a page name, id or 1-based number.',
+      inputSchema: {
+        type: 'object',
+        required: ['action'],
+        properties: {
+          action: { type: 'string', enum: ['list', 'add', 'open', 'rename', 'delete', 'reorder'] },
+          target: { type: ['string', 'number'], description: 'Page name, id or 1-based number' },
+          name: { type: 'string' },
+          names: { type: 'array', items: { type: 'string' }, description: 'reorder: every page name, in the new order' },
+        },
+      },
+      execute: guard(({ action, target, name, names }: any) => {
+        const list = () => {
+          const s = store.scene;
+          const lp = layerPages(s);
+          return {
+            pages: pagesOf(s).map((p, i) => ({
+              n: i + 1, id: p.id, name: p.name, ...(p.id === store.activePage ? { open: true } : {}),
+              floors: pageLayers(s, p.id).map((l) => l.name),
+              boxes: Object.values(s.nodes).filter((nd) => lp.get(nd.layer) === p.id).length,
+            })),
+          };
+        };
+        switch (action) {
+          case 'list':
+            return list();
+          case 'add': {
+            let layer = '';
+            store.update((s) => { layer = addPage(s, name ? String(name) : undefined).layer.id; });
+            store.focusLayer(layer);
+            ui.fit();
+            return list();
+          }
+          case 'open': {
+            store.openPage(resolvePage(store.scene, target).id);
+            ui.fit();
+            return list();
+          }
+          case 'rename': {
+            const p = resolvePage(store.scene, target);
+            if (!name) throw new ToolError('rename needs `name`');
+            store.update((s) => { ensurePages(s).find((x) => x.id === p.id)!.name = String(name); });
+            return list();
+          }
+          case 'delete': {
+            const p = resolvePage(store.scene, target);
+            if (pagesOf(store.scene).length < 2) throw new ToolError('Can\'t delete the only page');
+            const wasOpen = store.activePage === p.id;
+            store.update((s) => { deletePage(s, p.id); });
+            if (wasOpen) store.openPage(pagesOf(store.scene)[0].id);
+            return list();
+          }
+          case 'reorder': {
+            const order = (names ?? []).map((r: string) => resolvePage(store.scene, r));
+            if (order.length !== pagesOf(store.scene).length || new Set(order.map((p: any) => p.id)).size !== order.length)
+              throw new ToolError('reorder needs every page exactly once');
+            store.update((s) => { const ps = ensurePages(s); s.pages = order.map((p: any) => ps.find((x) => x.id === p.id)!); });
+            return list();
+          }
           default:
             throw new ToolError(`Unknown action "${action}"`);
         }
@@ -801,17 +960,16 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
         return { t, input: c.input ?? {} };
       });
       const mark = store.historyMark();
-      const before = JSON.stringify(store.scene);
       const results: unknown[] = [];
       for (const [i, { t, input }] of resolved.entries()) {
         try {
           results.push(JSON.parse(await t.execute(input)));
         } catch (e) {
-          store.rollback(mark, before);
+          store.rollback(mark);
           throw new ToolError(`Call ${i + 1} (${t.name}) failed, nothing was changed: ${(e as Error).message}`);
         }
       }
-      store.squash(mark, before);
+      store.squash(mark);
       return { results };
     }),
   });

@@ -267,17 +267,16 @@ describe('Simulation', () => {
     edge(a, b);
     edge(b, a);
     const r = new Simulation().step(sc, 1, vis);
-    // passes = min(64, 3 + 1) = 4; A's inflow grows each round trip without converging
-    expect(r.nodes.get(a.id)!.inRps).toBe(200);
-    expect(r.nodes.get(b.id)!.inRps).toBe(200);
+    // an amplifying loop (mult 1 both ways) grows by C's 100 rps each pass until the 64-pass limit
+    expect(r.nodes.get(a.id)!.inRps).toBe(6400);
+    expect(r.nodes.get(b.id)!.inRps).toBe(6400);
     expect(Number.isFinite(r.nodes.get(c.id)!.lat)).toBe(true);
-    // Known quirk: when the pass limit is hit, `handled` comes from the last pass while `inflow` is one
-    // pass ahead, so B (capacity 1e12) reports a phantom 50% drop: inRps 200, rps 100.
-    expect(r.nodes.get(b.id)!.rps).toBe(100);
-    expect(r.nodes.get(b.id)!.drop).toBeCloseTo(0.5);
+    // inflow and handled come from the same pass: no phantom drops on the loop
+    expect(r.nodes.get(b.id)!.rps).toBe(6400);
+    expect(r.nodes.get(b.id)!.drop).toBe(0);
     // the error walk cuts the cycle (B → A returns [0, 0]) instead of recursing forever
-    expect(r.nodes.get(a.id)!.err).toBeCloseTo(0.5);
-    expect(r.nodes.get(c.id)!.err).toBeCloseTo(0.5);
+    expect(r.nodes.get(a.id)!.err).toBe(0);
+    expect(r.nodes.get(c.id)!.err).toBe(0);
   });
 
   it('shared downstream nodes are walked once (memoized)', () => {

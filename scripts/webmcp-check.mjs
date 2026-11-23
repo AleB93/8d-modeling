@@ -72,7 +72,7 @@ const en = await send('WebMCP.enable');
 check('DevTools WebMCP domain available', !en.error, en.error?.message ?? '');
 await sleep(1500);
 const tools = events.filter((e) => e.method === 'WebMCP.toolsAdded').flatMap((e) => e.params.tools ?? []).filter((t) => t.name.startsWith('modeling8d_'));
-check('Agent discovers 8D modeling tools', tools.length === 16, `${tools.length} found`);
+check('Agent discovers 8D modeling tools', tools.length === 17, `${tools.length} found`);
 
 const invoke = async (toolName, input) => {
   events.length = 0;

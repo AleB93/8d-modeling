@@ -1,7 +1,7 @@
 import { decode, encode } from '@ab19993/zip-string';
 import type { View2D } from '../design/DesignCanvas';
 import { decodeScene, validateScene } from '../persistence/persist';
-import { Journey, KINDS, Layer, Scene, SEdge, SNode, Stop } from '../../shared/model/types';
+import { Journey, KINDS, Layer, Page, Scene, SEdge, SNode, Stop } from '../../shared/model/types';
 import { SHARE_DICT } from './shareDict';
 
 // Share links, no server: everything lives in the URL fragment.
@@ -34,7 +34,7 @@ export interface Shared {
 type CNode = Pick<SNode, 'id' | 'kind' | 'x' | 'y' | 'layer'> & Partial<SNode>;
 type CEdge = Pick<SEdge, 'id' | 'from' | 'to'> & Partial<SEdge>;
 type CLayer = Pick<Layer, 'id' | 'name'> & Partial<Layer>;
-interface Payload { v: 2; nodes: CNode[]; edges: CEdge[]; layers: CLayer[]; stops: Stop[]; journeys?: Journey[]; view?: ShareView }
+interface Payload { v: 2; nodes: CNode[]; edges: CEdge[]; layers: CLayer[]; pages?: Page[]; stops: Stop[]; journeys?: Journey[]; view?: ShareView }
 
 const NODE_DEFAULT_KEYS = ['w', 'h', 'height', 'color', 'capacity', 'latency'] as const;
 const EDGE_DEFAULTS = { label: '', dashed: false, mult: 1, flow: true } as const;
@@ -50,7 +50,7 @@ function packNode(n: SNode): CNode {
 }
 
 function unpackNode(c: CNode): SNode {
-  if (!KINDS[c.kind]) throw new Error(`Unknown node kind: ${c.kind}`);
+  if (!Object.hasOwn(KINDS, c.kind)) throw new Error(`Unknown node kind: ${c.kind}`);
   const d = KINDS[c.kind];
   const n: SNode = {
     id: c.id, kind: c.kind, x: c.x, y: c.y, w: c.w ?? d.w, h: c.h ?? d.h, layer: c.layer,
@@ -91,9 +91,10 @@ export function encodeShare(scene: Scene, view?: ShareView): string {
     v: 2,
     nodes: Object.values(scene.nodes).map(packNode),
     edges: Object.values(scene.edges).map(packEdge),
-    layers: scene.layers.map((l) => (l.visible ? { id: l.id, name: l.name } : { ...l })),
+    layers: scene.layers.map((l) => (l.visible ? { id: l.id, name: l.name, ...(l.page ? { page: l.page } : {}) } : { ...l })),
     stops: scene.stops,
   };
+  if (scene.pages?.length) p.pages = scene.pages.map((pg) => ({ id: pg.id, name: pg.name }));
   // steps keep only fields that are set, so a short journey costs a few dozen bytes
   if (scene.journeys.length) {
     p.journeys = scene.journeys.map((j) => ({
@@ -118,7 +119,8 @@ export async function decodeShare(hash: string): Promise<Shared | null> {
     v: 1,
     nodes: Object.fromEntries(p.nodes.map((c) => [c.id, unpackNode(c)])),
     edges: Object.fromEntries(p.edges.map((c) => [c.id, unpackEdge(c)])),
-    layers: (p.layers ?? []).map((l) => ({ id: l.id, name: l.name, visible: l.visible ?? true })),
+    layers: (p.layers ?? []).map((l) => ({ id: l.id, name: l.name, visible: l.visible ?? true, ...(l.page ? { page: l.page } : {}) })),
+    ...(p.pages ? { pages: p.pages } : {}),
     stops: p.stops ?? [],
     journeys: p.journeys ?? [],
   });

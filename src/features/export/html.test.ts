@@ -55,10 +55,31 @@ describe('sceneToHtml', () => {
     expect(raw).not.toContain('<');
     expect(raw).toContain('\\u003c/script>');
     const parsed = JSON.parse(raw);
-    expect(parsed).toEqual(sc);
+    // single page: same scene, each floor tagged with its level
+    expect(parsed).toEqual({ ...sc, layers: sc.layers.map((l, i) => ({ ...l, lv: i })) });
     expect(parsed.journeys[0]).toEqual({ id: 'j1', name: 'Login', color: '#f472b6', steps: [{ edge: Object.keys(sc.edges)[0], note: 'POST' }] });
     expect(parsed.stops[0].journey).toBe('j1');
     // exactly one closing tag per opened script (the label's </script> was neutralized)
     expect(html.match(/<script/g)!.length).toBe(html.match(/<\/script>/g)!.length);
+  });
+});
+
+describe('sceneToHtml with pages', () => {
+  it('places pages side by side and names floors by page', () => {
+    const sc = emptyScene();
+    const p2 = { id: 'p2', name: 'Ops' };
+    sc.pages!.push(p2);
+    sc.layers.push({ id: 'l2', name: 'Ground', visible: true, page: 'p2' });
+    const a = makeNode('service', 0, 0, sc.layers[0].id);
+    const b = makeNode('service', 0, 0, 'l2');
+    sc.nodes[a.id] = a;
+    sc.nodes[b.id] = b;
+    const parsed = JSON.parse(embedded(sceneToHtml(sc)));
+    expect(parsed.layers.map((l: any) => [l.name, l.lv])).toEqual([['Page 1 · Ground', 0], ['Ops · Ground', 0]]);
+    expect(parsed.nodes[b.id].x).toBeGreaterThan(a.x + a.w);
+    expect(parsed.nodes[a.id].x).toBe(0);
+    expect(sc.nodes[b.id].x).toBe(0); // the live scene is untouched
+    sc.nodes.orphan = makeNode('service', 5, 0, 'gone'); // a box on a missing floor stays where it is
+    expect(JSON.parse(embedded(sceneToHtml(sc))).nodes.orphan.x).toBe(5);
   });
 });

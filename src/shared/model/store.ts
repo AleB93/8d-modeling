@@ -1,7 +1,20 @@
-import { emptyScene, isEdgeId, isNodeId, Journey, Scene, SNode } from './types';
+import { emptyScene, Journey, Scene, SNode } from './types';
 import { findPath, journeyEnd, pruneJourneys, stepsToEdge } from '../../features/journeys/journeys';
+import { layerPages, pageLayers, pageOfLayer } from './pages';
 
 type Listener = () => void;
+
+/** Opaque snapshot returned by `Store.historyMark`. */
+export interface HistoryMark {
+  before: string;
+  past: string[];
+  future: string[];
+  activeLayer: string;
+  allLayers: boolean;
+  page: string;
+  selection: string[];
+  journey: { id: string; step: number } | null;
+}
 
 /**
  * Mutable scene + snapshot-based undo. Mutations go through `update` (records history)
@@ -23,6 +36,7 @@ export class Store {
   private lastKey = '';
   private lastAt = 0;
   private ls = new Set<Listener>();
+  private canvasLayers: Set<string> | null = null;
 
   constructor() {
     this.activeLayer = this.scene.layers[0].id;
@@ -34,6 +48,7 @@ export class Store {
   }
 
   emit() {
+    this.canvasLayers = null;
     for (const f of this.ls) f();
   }
 
@@ -52,14 +67,19 @@ export class Store {
   }
 
   update(fn: (s: Scene) => void, record: boolean | string = true) {
+    const page = this.activePage;
     if (record) this.checkpoint(typeof record === 'string' ? record : undefined);
     fn(this.scene);
-    this.tidyJourneys();
+    this.tidy(page);
     this.emit();
   }
 
-  /** Keep journeys consistent with the scene after any edit: drop dangling steps, clamp view state. */
-  private tidyJourneys() {
+  /**
+   * Keep view state consistent with the scene after any edit: drop dangling journey steps, clamp the
+   * journey on screen, forget deleted boxes in the selection and recording, and keep the active floor
+   * on a floor that exists (on `page` if it still has one).
+   */
+  private tidy(page = this.activePage) {
     const s = this.scene;
     s.journeys ??= [];
     pruneJourneys(s);
@@ -69,41 +89,69 @@ export class Store {
       else if (this.journey.step >= j.steps.length) this.journey.step = j.steps.length ? j.steps.length - 1 : -1;
     }
     if (this.recording && !s.journeys.some((x) => x.id === this.recording!.id)) this.recording = null;
+    if (this.recording?.from && !s.nodes[this.recording.from]) this.recording.from = null;
+    for (const id of [...this.selection]) if (!Object.hasOwn(s.nodes, id) && !Object.hasOwn(s.edges, id)) this.selection.delete(id);
+    if (s.layers.length && !s.layers.some((l) => l.id === this.activeLayer)) {
+      const own = pageLayers(s, page);
+      this.activeLayer = (own.length ? own : s.layers)[(own.length ? own : s.layers).length - 1].id;
+    }
   }
 
-  /** All-or-nothing update: if `fn` throws, the scene is restored and no history entry is left. */
+  /** All-or-nothing update: if `fn` throws, the scene and its history are restored. A change that changes nothing leaves no undo step. */
   transact(fn: (s: Scene) => void) {
-    const before = JSON.stringify(this.scene);
+    const mark = this.historyMark();
     this.checkpoint();
     try {
       fn(this.scene);
     } catch (e) {
-      this.scene = JSON.parse(before);
-      this.past.pop();
+      this.rollback(mark);
       throw e;
-    } finally {
-      this.tidyJourneys();
-      this.emit();
     }
+    if (JSON.stringify(this.scene) === mark.before) this.restoreHistory(mark);
+    this.tidy(mark.page);
+    this.emit();
   }
 
-  /** Undo-history position, for grouping several changes into one undo step (see `squash`). */
-  historyMark(): number { return this.past.length; }
+  /** Snapshot of the scene, its undo/redo history and view state, for grouping changes (see `squash`, `rollback`). */
+  historyMark(): HistoryMark {
+    return {
+      before: JSON.stringify(this.scene), past: [...this.past], future: [...this.future],
+      activeLayer: this.activeLayer, allLayers: this.allLayers, page: this.activePage,
+      selection: [...this.selection], journey: this.journey && { ...this.journey },
+    };
+  }
+
+  /** Number of undo steps available. */
+  get undoDepth() { return this.past.length; }
+
+  private restoreHistory(m: HistoryMark) {
+    this.past = [...m.past];
+    this.future = [...m.future];
+    this.lastKey = '';
+  }
 
   /**
-   * Merge every undo entry since `mark` into one, so a group of changes undoes with a single Ctrl+Z.
-   * `before` is the scene JSON at the mark.
+   * Make every change since `mark` a single undo step (nothing at all if the scene ended up unchanged),
+   * whatever happened in between: undo, redo, or history trimmed at its cap.
    */
-  squash(mark: number, before: string) {
-    if (this.past.length <= mark) return;
-    this.past.length = mark;
-    this.past.push(before);
+  squash(mark: HistoryMark) {
+    this.restoreHistory(mark);
+    if (JSON.stringify(this.scene) === mark.before) return;
+    this.past.push(mark.before);
+    if (this.past.length > 200) this.past.shift();
+    this.future = [];
   }
 
-  /** Throw away every change since `mark`: restore `before` and drop the history entries in between. */
-  rollback(mark: number, before: string) {
-    this.past.length = Math.min(this.past.length, mark);
-    this.load(JSON.parse(before), false);
+  /** Throw away every change since `mark`: scene, undo/redo history and view state go back to how they were. */
+  rollback(mark: HistoryMark) {
+    this.scene = JSON.parse(mark.before);
+    this.restoreHistory(mark);
+    this.activeLayer = mark.activeLayer;
+    this.allLayers = mark.allLayers;
+    this.selection = new Set(mark.selection);
+    this.journey = mark.journey && { ...mark.journey };
+    this.tidy(mark.page);
+    this.emit();
   }
 
   get canUndo() { return this.past.length > 0; }
@@ -124,15 +172,14 @@ export class Store {
   }
 
   load(scene: Scene, resetHistory = true) {
+    const page = this.activePage;
     this.scene = scene;
     if (resetHistory) {
       this.past = [];
       this.future = [];
     }
     this.lastKey = '';
-    for (const id of [...this.selection]) if (!scene.nodes[id] && !scene.edges[id]) this.selection.delete(id);
-    if (!scene.layers.some((l) => l.id === this.activeLayer)) this.activeLayer = scene.layers[scene.layers.length - 1].id;
-    this.tidyJourneys();
+    this.tidy(page);
     this.emit();
   }
 
@@ -142,6 +189,33 @@ export class Store {
     const layers = new Set(this.selectedNodes.map((n) => n.layer));
     if (layers.size === 1) this.activeLayer = [...layers][0];
     this.emit();
+  }
+
+  /** Page shown in the 2D editor: the page of the active layer. */
+  get activePage(): string {
+    return pageOfLayer(this.scene, this.activeLayer);
+  }
+
+  /** Open a page in 2D: its top floor becomes the active layer, and selection on other pages is dropped. */
+  openPage(pageId: string) {
+    const ls = pageLayers(this.scene, pageId);
+    if (!ls.length || pageId === this.activePage) return;
+    this.activeLayer = ls[ls.length - 1].id;
+    const lp = layerPages(this.scene);
+    for (const id of [...this.selection]) {
+      const n = this.scene.nodes[id] ?? this.scene.nodes[this.scene.edges[id]?.from];
+      if (!n || lp.get(n.layer) !== pageId) this.selection.delete(id);
+    }
+    this.emit();
+  }
+
+  /** True if a layer is drawn in the 2D editor: visible and on the open page. */
+  onCanvas(layerId: string) {
+    if (!this.canvasLayers) {
+      const lp = layerPages(this.scene), page = this.activePage;
+      this.canvasLayers = new Set(this.scene.layers.filter((l) => l.visible && lp.get(l.id) === page).map((l) => l.id));
+    }
+    return this.canvasLayers.has(layerId);
   }
 
   /** Change the insertion layer without leaving "All layers" mode. */
@@ -183,7 +257,12 @@ export class Store {
   setJourney(id: string | null, step = -1) {
     const j = this.journeyById(id);
     const next = j ? { id: j.id, step: Math.max(-1, Math.min(step, j.steps.length - 1)) } : null;
-    if (next?.id === this.journey?.id && next?.step === this.journey?.step) return;
+    // showing a journey opens its page, even when it's already the one on screen
+    const e = j && this.scene.edges[j.steps[0]?.edge];
+    const n = e && this.scene.nodes[e.from];
+    const otherPage = !!n && pageOfLayer(this.scene, n.layer) !== this.activePage;
+    if (!otherPage && next?.id === this.journey?.id && next?.step === this.journey?.step) return;
+    if (otherPage) this.activeLayer = n!.layer;
     this.journey = next;
     if (this.recording && this.recording.id !== next?.id) this.recording = null;
     this.emit();
@@ -261,7 +340,7 @@ export class Store {
 
   /** Node ids to move: the given nodes plus everything fully inside a moved zone (same layer). */
   moveSet(ids: string[]): string[] {
-    const set = new Set(ids.filter(isNodeId));
+    const set = new Set(ids.filter((id) => Object.hasOwn(this.scene.nodes, id)));
     for (const id of [...set]) {
       const z = this.scene.nodes[id];
       if (!z || z.kind !== 'zone') continue;
@@ -276,10 +355,11 @@ export class Store {
     if (!this.selection.size) return;
     this.update((s) => {
       for (const id of this.selection) {
-        if (isNodeId(id)) {
+        // by membership, not id prefix: loaded scenes may use any ids
+        if (Object.hasOwn(s.nodes, id)) {
           delete s.nodes[id];
           for (const e of Object.values(s.edges)) if (e.from === id || e.to === id) delete s.edges[e.id];
-        } else if (isEdgeId(id)) delete s.edges[id];
+        } else if (Object.hasOwn(s.edges, id)) delete s.edges[id];
       }
     });
     this.select([]);

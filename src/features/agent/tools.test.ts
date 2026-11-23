@@ -49,11 +49,11 @@ async function seedChain() {
 }
 
 describe('tool definitions', () => {
-  it('exposes the 16 modeling8d tools with schemas', () => {
+  it('exposes the 17 modeling8d tools with schemas', () => {
     expect(Object.keys(tools)).toEqual([
       'modeling8d_get_scene', 'modeling8d_add_nodes', 'modeling8d_connect', 'modeling8d_update', 'modeling8d_delete',
       'modeling8d_layers', 'modeling8d_auto_layout', 'modeling8d_simulate', 'modeling8d_view', 'modeling8d_journeys',
-      'modeling8d_undo', 'modeling8d_share_link', 'modeling8d_redo', 'modeling8d_tour', 'modeling8d_scene', 'modeling8d_batch',
+      'modeling8d_undo', 'modeling8d_share_link', 'modeling8d_redo', 'modeling8d_tour', 'modeling8d_scene', 'modeling8d_pages', 'modeling8d_batch',
     ]);
     for (const t of Object.values(tools)) {
       expect(t.title).toBeTruthy();
@@ -99,9 +99,10 @@ describe('modeling8d_get_scene', () => {
 
     const r = await call('get_scene');
     expect(r.layers).toEqual([
-      { id: ground, name: 'Ground', floor: 0, visible: true },
-      { id: 'l_top', name: 'Top', floor: 1, visible: false },
+      { id: ground, name: 'Ground', page: 'Page 1', floor: 0, visible: true },
+      { id: 'l_top', name: 'Top', page: 'Page 1', floor: 1, visible: false },
     ]);
+    expect(r.pages).toEqual([{ id: expect.any(String), name: 'Page 1', open: true, floors: 2 }]);
     const svcOut = r.nodes.find((n: any) => n.label === 'Svc');
     expect(svcOut).toMatchObject({ kind: 'service', layer: 'Ground', x: 10, y: 21, capacity: 800, latency: 15, down: true });
     const zoneOut = r.nodes.find((n: any) => n.label === 'Zone');
@@ -222,7 +223,7 @@ describe('modeling8d_update', () => {
   it('updates connections', async () => {
     await seedChain();
     const e = edgeBetween('API', 'DB');
-    const r = await call('update', { updates: [{ target: e.id, label: 'sql', mult: -2, async: 1, from: 'Web', to: 'Cache' }] });
+    const r = await call('update', { updates: [{ target: e.id, label: 'sql', mult: 0, async: 1, from: 'Web', to: 'Cache' }] });
     expect(r).toEqual({ changed: [e.id], newLayers: [] });
     expect(store.scene.edges[e.id]).toMatchObject({ label: 'sql', mult: 0, dashed: true, from: nodeByLabel('Web').id, to: nodeByLabel('Cache').id });
     // an update with no fields leaves the edge as is
@@ -304,8 +305,8 @@ describe('modeling8d_layers', () => {
     await call('layers', { action: 'add', names: ['A'] });
     const before = JSON.stringify(store.scene.layers);
     await expect(call('layers', { action: 'rename', target: 'Nope', name: 'X' })).rejects.toThrow('No layer "Nope"');
-    await expect(call('layers', { action: 'reorder', names: ['A'] })).rejects.toThrow('reorder needs every layer name exactly once');
-    await expect(call('layers', { action: 'reorder' })).rejects.toThrow('reorder needs every layer name exactly once');
+    await expect(call('layers', { action: 'reorder', names: ['A'] })).rejects.toThrow('reorder needs every floor of the open page exactly once');
+    await expect(call('layers', { action: 'reorder' })).rejects.toThrow('reorder needs every floor of the open page exactly once');
     await expect(call('layers', { action: 'explode' })).rejects.toThrow('Unknown action "explode"');
     expect(JSON.stringify(store.scene.layers)).toBe(before);
   });

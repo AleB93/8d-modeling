@@ -21,7 +21,8 @@ await modeling8d.call('add_nodes', { nodes: [...] })
 
 ## Concepts
 
-- **Floors (layers):** horizontal levels, stacked in 3D. Index 0 is the bottom floor.
+- **Pages:** independent diagrams in one scene (for example "Production" and "Staging"). Each page has its own floors and boxes, and connections can't cross pages. The 2D editor shows the open page, and edits go there. 3D shows every page side by side on the ground.
+- **Floors (layers):** horizontal levels of a page, stacked in 3D. Floor 0 is the bottom floor of its page.
 - **Nodes:** `service`, `database`, `queue`, `cache`, `lb` (load balancer), `client` (a traffic source), `zone` (a grouping box such as a VPC) and `text`.
 - **Connections:** directed, from caller to callee. `mult` is the number of calls to the target per request handled. `async: true` means fire-and-forget, for example publishing to a queue.
 - **Journeys:** named user paths through existing connections, such as "Login" or "Checkout". Each step can have a caption. Steps back toward the caller are responses.
@@ -29,12 +30,13 @@ await modeling8d.call('add_nodes', { nodes: [...] })
 
 ## Tools
 
-- `get_scene` (read-only): floors, nodes and connections, as JSON. Call it before editing.
+- `get_scene` (read-only): pages (the open one marked `open`), floors, nodes and connections, as JSON. Call it before editing.
 - `add_nodes`: `{ nodes: [{ ref?, kind, label, layer?, x?, y?, capacity?, latency?, color? }] }`. A `layer` name that doesn't exist yet creates a new top floor. A `ref` can be used in `connect` later.
 - `connect`: `{ edges: [{ from, to, label?, mult?, async? }], refs? }`. `from` and `to` accept a node id, a ref or an exact label.
 - `update`: `{ updates: [{ target, ...fields }] }`. Node fields: label, layer, x, y, w, h, height, color, capacity, latency, kind and `down` (failed). Edge fields: label, mult, async, from, to.
 - `delete`: `{ targets: [idOrLabel, ...] }`. Deleting a node also removes its connections.
-- `layers`: `{ action: "add" | "rename" | "reorder" | "show" | "hide" | "delete" | "focus", names?, target?, name?, deleteNodes? }`. `delete` needs an empty floor unless `deleteNodes: true`. `focus` dims the other floors; `target: "all"` undims them.
+- `pages`: `{ action: "list" | "add" | "open" | "rename" | "delete" | "reorder", target?, name?, names? }`. `add` creates a page with one floor "Ground" and opens it. `delete` also deletes the page's boxes. `target` is a page name, id or 1-based number.
+- `layers`: floors of the open page. `{ action: "add" | "rename" | "reorder" | "show" | "hide" | "delete" | "focus", names?, target?, name?, deleteNodes? }`. `delete` needs an empty floor unless `deleteNodes: true`. `focus` dims the other floors; `target: "all"` undims them.
 - `auto_layout`: `{ layers?: [name] }` arranges the diagram by dependency depth. Call it after adding nodes.
 - `simulate` (read-only): `{ multiplier?, seconds?, down?: [idOrLabel] }` returns throughput, errors, latency and bottlenecks.
 - `journeys`: `{ action: "list" | "create" | "update" | "delete" | "show" | "play", id?, name?, color?, start?, steps?: [{ to, note? }], step? }`. Each hop follows the existing connections. `play` animates it step by step.
@@ -65,6 +67,21 @@ await modeling8d.call('view', { mode: 'play', overview: true })
 await modeling8d.call('tour', { action: 'add', name: 'Overview' })
 await modeling8d.call('simulate', { multiplier: 2 })
 await modeling8d.call('share_link')
+```
+
+A second, separate diagram on its own page (shown next to the first one in 3D):
+
+```js
+await modeling8d.batch([
+  { tool: 'pages', input: { action: 'add', name: 'Analytics' } },
+  { tool: 'add_nodes', input: { nodes: [
+    { kind: 'queue', label: 'Events', layer: 'Ground' },
+    { kind: 'service', label: 'ETL', layer: 'Ground' },
+    { kind: 'database', label: 'Warehouse', layer: 'Ground' },
+  ] } },
+  { tool: 'connect', input: { edges: [{ from: 'Events', to: 'ETL' }, { from: 'ETL', to: 'Warehouse' }] } },
+  { tool: 'auto_layout' },
+])
 ```
 
 The same thing one call at a time:

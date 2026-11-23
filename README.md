@@ -15,6 +15,7 @@ npm test         # unit + smoke tests
 **Design (2D)**: Canvas2D editor. Tools: select, pan, connect, service, database, queue, cache, load balancer, client, zone, text.
 Snapping and alignment guides, resize handles, marquee selection, copy/paste/duplicate, undo/redo, inline labels.
 Layers are floors: the top of the list is the top floor in 3D.
+**Pages** are separate diagrams in one scene, shown as folders in the Layers panel, each with its own floors. The 2D editor shows the open page, and 3D lays every page out side by side on the ground.
 
 **Play (3D)**: three.js view of the same model.
 - **Flows**: particles travel along every connection.
@@ -47,12 +48,13 @@ await modeling8d.batch([{ tool: 'add_nodes', input: {...} }, { tool: 'connect', 
 
 | Tool | What it does |
 |---|---|
-| `modeling8d_get_scene` | Read floors, nodes and connections (read-only) |
+| `modeling8d_get_scene` | Read pages, floors, nodes and connections (read-only) |
 | `modeling8d_add_nodes` | Batch-add components; `ref`s can be used in `modeling8d_connect`; layers are auto-created by name |
 | `modeling8d_connect` | Batch-add directed connections (by id, ref or label), with calls-per-request and async |
 | `modeling8d_update` | Change node/edge fields, move between floors, mark nodes `down` |
 | `modeling8d_delete` | Remove nodes/edges |
-| `modeling8d_layers` | Add / rename / reorder / show / hide / delete floors, focus one floor |
+| `modeling8d_pages` | List / add / open / rename / delete / reorder pages (independent diagrams, side by side in 3D) |
+| `modeling8d_layers` | Add / rename / reorder / show / hide / delete floors of the open page, focus one floor |
 | `modeling8d_auto_layout` | Lay nodes out by dependency depth, each floor in its own block |
 | `modeling8d_simulate` | Run the traffic simulation headlessly (load multiplier, what-if failures) → totals + bottlenecks (read-only) |
 | `modeling8d_journeys` | List / create / update / delete user journeys (start node + hops with captions), show or play one |
@@ -80,14 +82,14 @@ Code is grouped by feature. Each feature folder holds its logic, its UI and its 
 ```
 src/main.tsx               entry point
 src/app/App.tsx            shell: top bar, modes, keyboard shortcuts, wiring between features
-src/shared/model/          types (Scene/Node/Edge/Layer/Stop/Journey), geom, store (mutable scene + snapshot undo)
+src/shared/model/          types (Scene/Node/Edge/Layer/Page/Stop/Journey), pages, geom, store (mutable scene + snapshot undo)
 src/shared/appStore.ts     the app's single Store instance
 src/shared/ui/             icons, number formatting, DOM helpers
 src/features/
   design/                  DesignCanvas (2D renderer + interaction), toolbar, inline label editor
   play3d/                  Viewer3D (lazy-loaded three.js view), hover tooltip
   inspector/               properties panel for the selection
-  layers/                  floors panel, incl. "All layers"
+  layers/                  pages (folders) and floors panel, incl. "All layers"
   simulation/              traffic simulation engine + panel
   journeys/                path finding and playback timing, journeys panel, caption bar
   tour/                    camera stops panel

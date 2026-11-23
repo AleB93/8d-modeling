@@ -1,5 +1,6 @@
 import { KINDS, Scene, SNode } from '../../shared/model/types';
 import { stepText } from '../journeys/journeys';
+import { pageLayers, pagesOf } from '../../shared/model/pages';
 
 // A text version of the diagram, for anything that can't see the canvas: screen readers and
 // AI agents that read the page structure (e.g. Claude in Chrome's page reader).
@@ -17,14 +18,15 @@ function nodeText(n: SNode): string {
   return `${n.label || '(unnamed)'}, ${kind}${n.down ? ', down' : ''}`;
 }
 
-/** Floors top to bottom, boxes in reading order (top-left first), each with its outgoing connections. */
+/** Pages in order, each page's floors top to bottom, boxes in reading order (top-left first), each with its outgoing connections. */
 export function sceneOutline(s: Scene): Outline {
   const nodes = Object.values(s.nodes);
   const edges = Object.values(s.edges);
   const label = (id: string) => s.nodes[id]?.label || '(unnamed)';
-  const floors = [...s.layers].reverse().map((l) => ({
+  const pages = pagesOf(s);
+  const floors = pages.flatMap((p) => pageLayers(s, p.id).reverse().map((l) => ({ l, p }))).map(({ l, p }) => ({
     id: l.id,
-    text: `Floor ${l.name}${l.visible ? '' : ' (hidden)'}`,
+    text: `${pages.length > 1 ? `${p.name}: floor` : 'Floor'} ${l.name}${l.visible ? '' : ' (hidden)'}`,
     nodes: nodes
       .filter((n) => n.layer === l.id)
       .sort((a, b) => a.y - b.y || a.x - b.x)
@@ -40,7 +42,7 @@ export function sceneOutline(s: Scene): Outline {
       })),
   }));
   return {
-    summary: `Diagram with ${plural(nodes.length, 'box', 'boxes')}, ${plural(edges.length, 'connection')}, ${plural(s.layers.length, 'floor')} and ${plural(s.journeys.length, 'journey')}.`,
+    summary: `Diagram with ${pages.length > 1 ? `${plural(pages.length, 'page')}, ` : ''}${plural(nodes.length, 'box', 'boxes')}, ${plural(edges.length, 'connection')}, ${plural(s.layers.length, 'floor')} and ${plural(s.journeys.length, 'journey')}.`,
     floors,
     journeys: s.journeys.map((j) => ({
       id: j.id,

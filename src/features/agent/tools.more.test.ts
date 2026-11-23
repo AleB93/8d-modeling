@@ -84,7 +84,7 @@ describe('view extras', () => {
     expect(ui.setMultiplier).toHaveBeenLastCalledWith(0);
   });
   it('rejects a bad multiplier', async () => {
-    await expect(call('view', { multiplier: -1 })).rejects.toThrow('multiplier must be a number ≥ 0');
+    await expect(call('view', { multiplier: -1 })).rejects.toThrow('multiplier must be ≥ 0');
     await expect(call('view', { multiplier: 'lots' })).rejects.toThrow('multiplier');
   });
 });
@@ -166,7 +166,7 @@ describe('tour', () => {
 describe('scene', () => {
   it('starts empty or from the demo, undoably', async () => {
     await seed();
-    expect(await call('scene', { action: 'new' })).toEqual({ nodes: 0, edges: 0, floors: 1 });
+    expect(await call('scene', { action: 'new' })).toEqual({ pages: 1, nodes: 0, edges: 0, floors: 1 });
     expect(ui.fit).toHaveBeenCalled();
     await call('undo');
     expect(nodeCount()).toBe(2);
@@ -221,5 +221,27 @@ describe('batch', () => {
     await expect(call('batch', { calls: [{ tool: 'batch' }] })).rejects.toThrow('Call 1: unknown tool "batch"');
     await expect(call('batch', { calls: [null] })).rejects.toThrow('Call 1: unknown tool "undefined"');
     expect(nodeCount()).toBe(0);
+  });
+});
+
+describe('scene load safety', () => {
+  it('a load that fails part-way changes nothing', async () => {
+    await seed();
+    const before = JSON.stringify(store.scene), depth = store.undoDepth;
+    const orig = store.load.bind(store);
+    vi.spyOn(store, 'load').mockImplementationOnce(() => { throw new Error('boom'); });
+    await expect(call('scene', { action: 'new' })).rejects.toThrow('Invalid scene: boom');
+    expect(JSON.stringify(store.scene)).toBe(before);
+    expect(store.undoDepth).toBe(depth);
+    store.load = orig;
+  });
+});
+
+describe('input checks before any change', () => {
+  it('simulate needs `down` to be a list; view needs a known mode', async () => {
+    await seed();
+    await expect(call('simulate', { down: 'API' })).rejects.toThrow('down must be an array');
+    await expect(call('view', { mode: '3d', simulate: true })).rejects.toThrow('mode must be "design" or "play"');
+    expect(ui.setSimulation).not.toHaveBeenCalled();
   });
 });

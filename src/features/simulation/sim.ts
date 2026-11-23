@@ -18,6 +18,9 @@ export interface SimResult {
 
 const TIMEOUT_MS = 1000;
 const MAX_BACKLOG_S = 60; // queue holds this many seconds of drain capacity
+/** Load is clamped here so absurd inputs (mult 1e307, infinite capacity) can't overflow into NaN. */
+const MAX_RPS = 1e12;
+const clampRps = (x: number) => (x > 0 ? Math.min(x, MAX_RPS) : 0);
 
 /**
  * Steady-state traffic model.
@@ -54,48 +57,74 @@ export class Simulation {
       return healthy.length ? healthy : es;
     };
 
-    // ---- propagate load (Jacobi iterations; converges in graph depth for DAGs, bounded for cycles) ----
-    let inflow = new Map<string, number>();
+    // ---- propagate load ----
+    // Nodes are visited in topological order (Kahn), nodes on cycles last, and each node reads its
+    // callers' current flows (Gauss-Seidel). A DAG is exact after one pass; cycles iterate until stable.
+    const ins = new Map<string, SEdge[]>();
+    const indeg = new Map<string, number>(nodes.map((n) => [n.id, 0]));
+    for (const es of outs.values()) for (const e of es) {
+      let l = ins.get(e.to);
+      if (!l) ins.set(e.to, (l = []));
+      l.push(e);
+      if (e.from !== e.to) indeg.set(e.to, indeg.get(e.to)! + 1);
+    }
+    const order: SNode[] = [];
+    const queue = nodes.filter((n) => indeg.get(n.id) === 0);
+    while (queue.length) {
+      const n = queue.shift()!;
+      order.push(n);
+      for (const e of outs.get(n.id) ?? []) {
+        if (e.from === e.to) continue;
+        const d = indeg.get(e.to)! - 1;
+        indeg.set(e.to, d);
+        if (d === 0) queue.push(byId.get(e.to)!);
+      }
+    }
+    const placed = new Set(order);
+    for (const n of nodes) if (!placed.has(n)) order.push(n);
+
+    const inflow = new Map<string, number>();
     const handled = new Map<string, number>();
     const edgeRps = new Map<string, number>();
-    const passes = Math.min(64, nodes.length + 1);
-    for (let p = 0; p < passes; p++) {
-      const next = new Map<string, number>();
-      for (const n of nodes) {
-        const inc = n.kind === 'client' ? n.capacity * this.multiplier : inflow.get(n.id) ?? 0;
+    const offered = (n: SNode) => {
+      if (n.kind === 'client') return clampRps(n.capacity * this.multiplier);
+      let s = 0;
+      for (const e of ins.get(n.id) ?? []) s += edgeRps.get(e.id) ?? 0;
+      return clampRps(s);
+    };
+    for (let p = 0; p < 64; p++) {
+      let changed = false;
+      for (const n of order) {
+        const inc = offered(n);
+        inflow.set(n.id, inc);
         let h: number;
         if (n.down) h = 0;
         else if (n.kind === 'client') h = inc;
-        else if (n.kind === 'queue') h = (this.backlog.get(n.id) ?? 0) > 0.5 ? n.capacity : Math.min(inc, n.capacity);
-        else h = Math.min(inc, n.capacity);
+        else if (n.kind === 'queue') {
+          // a queue with a backlog drains at full speed, but never more than it holds plus what arrives
+          const backlog = this.backlog.get(n.id) ?? 0;
+          h = backlog > 0.5 ? Math.min(n.capacity, inc + (dt > 0 ? backlog / dt : Infinity)) : Math.min(inc, n.capacity);
+        } else h = Math.min(inc, n.capacity);
+        h = clampRps(h);
         handled.set(n.id, h);
         const es = outs.get(n.id);
         if (!es) continue;
-        if (n.kind === 'lb') {
-          const pool = lbPool(es);
-          for (const e of es) {
-            const f = pool.includes(e) ? (h / pool.length) * e.mult : 0;
-            edgeRps.set(e.id, f);
-            next.set(e.to, (next.get(e.to) ?? 0) + f);
-          }
-        } else {
-          for (const e of es) {
-            const f = h * e.mult;
-            edgeRps.set(e.id, f);
-            next.set(e.to, (next.get(e.to) ?? 0) + f);
-          }
+        const pool = n.kind === 'lb' ? lbPool(es) : es;
+        for (const e of es) {
+          const f = clampRps(pool.includes(e) ? (h / (n.kind === 'lb' ? pool.length : 1)) * e.mult : 0);
+          if (Math.abs((edgeRps.get(e.id) ?? 0) - f) > 1e-6) changed = true;
+          edgeRps.set(e.id, f);
         }
       }
-      let changed = false;
-      for (const [k, v] of next) if (Math.abs((inflow.get(k) ?? 0) - v) > 1e-6) { changed = true; break; }
-      if (!changed && next.size === inflow.size && p > 0) { inflow = next; break; }
-      inflow = next;
+      if (!changed) break;
     }
+    // `inflow` and `handled` both come from the last pass, so they always agree (no phantom drops when an
+    // amplifying cycle hits the pass limit).
 
     // ---- per-node own drop + queue backlog ----
     const stats = new Map<string, NodeStat>();
     for (const n of nodes) {
-      const inc = n.kind === 'client' ? n.capacity * this.multiplier : inflow.get(n.id) ?? 0;
+      const inc = inflow.get(n.id)!;
       const h = handled.get(n.id)!; // every pass sets handled for every node
       let drop = 0;
       let backlog = 0;
@@ -115,49 +144,60 @@ export class Simulation {
     }
 
     // ---- error + latency propagation (memoized DFS; cycles cut) ----
-    const errMemo = new Map<string, number>();
-    const latMemo = new Map<string, number>();
-    const visiting = new Set<string>();
-    const walk = (id: string): [number, number] => {
-      if (errMemo.has(id)) return [errMemo.get(id)!, latMemo.get(id)!];
-      if (visiting.has(id)) return [0, 0];
-      visiting.add(id);
+    // A cycle is cut where the walk re-enters a node still on the stack. A result that depended on such a
+    // cut above it (an ancestor) is only valid for the current walk, so it's cached per walk, not globally;
+    // otherwise results would depend on the order nodes were created in.
+    const memo = new Map<string, [number, number]>();
+    let walkMemo = new Map<string, [number, number, number]>();
+    const depth = new Map<string, number>();
+    const walk = (id: string): [number, number, number] => {
+      const m = memo.get(id);
+      if (m) return [m[0], m[1], Infinity];
+      const w = walkMemo.get(id);
+      if (w) return w;
+      const onStack = depth.get(id);
+      if (onStack != null) return [0, 0, onStack];
+      const d = depth.size;
+      depth.set(id, d);
       const n = byId.get(id)!;
       const st = stats.get(id)!;
       const rho = Math.min(st.util, 0.95);
-      let own = n.down ? TIMEOUT_MS : n.latency / (1 - rho);
+      const own = n.down ? TIMEOUT_MS : n.latency / (1 - rho);
       let downErr = 0;
       let downLat = 0;
+      let low = Infinity;
       const es = outs.get(id) ?? [];
       if (n.kind !== 'queue' && !n.down && es.length) {
         if (n.kind === 'lb') {
           const pool = lbPool(es);
           for (const e of pool) {
-            const [er, la] = walk(e.to);
+            const [er, la, lo] = walk(e.to);
+            low = Math.min(low, lo);
             downErr += er / pool.length;
             downLat += (la * e.mult) / pool.length;
           }
         } else {
           let ok = 1;
           for (const e of es) {
-            const [er, la] = walk(e.to);
+            const [er, la, lo] = walk(e.to);
+            low = Math.min(low, lo);
             ok *= 1 - er * Math.min(1, e.mult);
             downLat += la * e.mult;
           }
           downErr = 1 - ok;
         }
       }
-      if (n.down) own = TIMEOUT_MS;
       const err = 1 - (1 - st.drop) * (1 - downErr);
-      const lat = own + downLat;
-      visiting.delete(id);
-      errMemo.set(id, err);
-      latMemo.set(id, lat);
-      return [err, lat];
+      const lat = Math.min(own + downLat, Number.MAX_VALUE);
+      depth.delete(id);
+      if (low < d) walkMemo.set(id, [err, lat, low]);
+      else memo.set(id, [err, lat]);
+      return [err, lat, low < d ? low : Infinity];
     };
 
     const total = { rps: 0, err: 0, lat: 0, clients: 0 };
     for (const n of nodes) {
+      walkMemo = new Map();
       const [err, lat] = walk(n.id);
       const st = stats.get(n.id)!;
       st.err = err;

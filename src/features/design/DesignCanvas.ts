@@ -112,7 +112,7 @@ export class DesignCanvas {
   }
 
   fit() {
-    const b = bounds(Object.values(this.store.scene.nodes).filter((n) => this.store.isLayerVisible(n.layer)));
+    const b = bounds(Object.values(this.store.scene.nodes).filter((n) => this.store.onCanvas(n.layer)));
     if (!b || !this.w) return;
     const z = Math.max(0.1, Math.min(2, Math.min(this.w / (b.x1 - b.x0), this.h / (b.y1 - b.y0)) * 0.8));
     this.view = { z, x: (b.x0 + b.x1) / 2 - this.w / 2 / z, y: (b.y0 + b.y1) / 2 - this.h / 2 / z };
@@ -140,7 +140,7 @@ export class DesignCanvas {
 
   // ---------- hit testing ----------
   private visibleNodes(): SNode[] {
-    return Object.values(this.store.scene.nodes).filter((n) => this.store.isLayerVisible(n.layer));
+    return Object.values(this.store.scene.nodes).filter((n) => this.store.onCanvas(n.layer));
   }
 
   /** Topmost node at a world point. Active layer wins; zones only hit on their border/title. */
@@ -170,7 +170,7 @@ export class DesignCanvas {
     const s = this.store.scene;
     for (const e of Object.values(s.edges)) {
       const a = s.nodes[e.from], b = s.nodes[e.to];
-      if (!a || !b || !this.store.isLayerVisible(a.layer) || !this.store.isLayerVisible(b.layer)) continue;
+      if (!a || !b || !this.store.onCanvas(a.layer) || !this.store.onCanvas(b.layer)) continue;
       const [x1, y1, x2, y2] = edgeEnds(a, b);
       if (distToSeg(wx, wy, x1, y1, x2, y2) < tol) return e;
     }
@@ -503,7 +503,7 @@ export class DesignCanvas {
     const c = this.clip;
     if (!c) return;
     const map = new Map<string, string>();
-    const layerOk = new Set(this.store.scene.layers.map((l) => l.id));
+    const layerOk = new Set(this.store.scene.layers.filter((l) => this.store.onCanvas(l.id)).map((l) => l.id));
     const nodes = c.nodes.map((n) => {
       const id = uid('n');
       map.set(n.id, id);
@@ -532,7 +532,7 @@ export class DesignCanvas {
     const vx0 = view.x, vy0 = view.y, vx1 = vx0 + this.w / z, vy1 = vy0 + this.h / z;
     const inView = (n: SNode) => !(n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0);
     const s = this.store.scene;
-    const vis = new Set(s.layers.filter((l) => l.visible).map((l) => l.id));
+    const vis = new Set(s.layers.filter((l) => this.store.onCanvas(l.id)).map((l) => l.id));
     const sel = this.store.selection;
 
     // a shown journey takes over dimming: everything off its path fades, whatever the layer
@@ -865,6 +865,6 @@ export class DesignCanvas {
   /** True when a node id is visible in the editor (for label editing overlay). */
   isNodeVisible(id: string) {
     const n = this.store.scene.nodes[id];
-    return !!n && isNodeId(id) && this.store.isLayerVisible(n.layer);
+    return !!n && isNodeId(id) && this.store.onCanvas(n.layer);
   }
 }

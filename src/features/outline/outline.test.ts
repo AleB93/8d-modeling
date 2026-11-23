@@ -45,3 +45,14 @@ describe('sceneOutline', () => {
     expect(o.journeys).toEqual([{ id: 'j1', text: 'Login (2 steps)', steps: ['Web → API: POST', 'API → Web (response)'] }]);
   });
 });
+
+describe('sceneOutline with pages', () => {
+  it('groups floors by page and counts pages', () => {
+    const s = emptyScene();
+    s.pages!.push({ id: 'p2', name: 'Ops' });
+    s.layers.push({ id: 'l2', name: 'Ground', visible: true, page: 'p2' });
+    const o = sceneOutline(s);
+    expect(o.summary).toBe('Diagram with 2 pages, 0 boxes, 0 connections, 2 floors and 0 journeys.');
+    expect(o.floors.map((f) => f.text)).toEqual(['Page 1: floor Ground', 'Ops: floor Ground']);
+  });
+});

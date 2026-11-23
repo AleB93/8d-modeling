@@ -77,6 +77,7 @@ input, select, textarea { font: inherit; color: var(--text); }
 .inspector { position: absolute; right: 12px; top: 70px; width: 260px; padding: 12px; max-height: calc(100vh - 106px - var(--jh, 0px)); overflow: auto; display: flex; flex-direction: column; gap: 10px; }
 h3 { margin: 0 0 4px; font-size: 13px; font-weight: 650; display: flex; align-items: center; gap: 7px; }
 h3 .icon { margin-left: auto; }
+h3 .icon + .icon { margin-left: 0; }
 h4 { margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
 .dot { width: 10px; height: 10px; border-radius: 3px; }
 .layer { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px; border-radius: 8px; cursor: pointer; }
@@ -90,6 +91,13 @@ h4 { margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing
 .layer input.name { background: #0d1016; border: 1px solid var(--accent); border-radius: 5px; padding: 2px 5px; min-width: 0; }
 .layer .count, .layer .num { font-size: 11px; color: var(--muted); min-width: 16px; text-align: center; }
 .layer .num { background: #222838; border-radius: 5px; padding: 1px 4px; }
+.layer.folder { font-weight: 600; gap: 4px; }
+.layer.folder.current { color: var(--accent); }
+.layer.folder > svg { flex: none; opacity: 0.85; }
+.layer.folder .chev { display: flex; transition: transform 0.15s; }
+.page.open .layer.folder .chev { transform: rotate(90deg); }
+.layer.folder button:disabled { opacity: 0.5; cursor: default; }
+.layer.floor { padding-left: 18px; }
 .layer .acts { display: none; }
 .layer:hover .acts { display: flex; }
 .layer:hover .count { display: none; }

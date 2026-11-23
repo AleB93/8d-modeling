@@ -5,7 +5,7 @@ import type { Journey, JStep, Scene } from '../../shared/model/types';
 
 /** Source and target node of a step, in walking order (a `back` step runs against the arrow). */
 export function stepEnds(s: Scene, st: JStep): { from: string; to: string } | null {
-  const e = s.edges[st.edge];
+  const e = Object.hasOwn(s.edges, st.edge) ? s.edges[st.edge] : undefined;
   if (!e) return null;
   return st.back ? { from: e.to, to: e.from } : { from: e.from, to: e.to };
 }
@@ -92,7 +92,7 @@ export function stepsToEdge(s: Scene, start: string | null, edgeId: string, pref
 export function pruneJourneys(s: Scene): boolean {
   let changed = false;
   for (const j of s.journeys) {
-    const kept = j.steps.filter((st) => s.edges[st.edge]);
+    const kept = j.steps.filter((st) => Object.hasOwn(s.edges, st.edge));
     if (kept.length !== j.steps.length) { j.steps = kept; changed = true; }
   }
   return changed;
@@ -102,7 +102,8 @@ export function pruneJourneys(s: Scene): boolean {
 export function stepText(s: Scene, st: JStep): string {
   const ends = stepEnds(s, st);
   if (!ends) return '?';
-  return `${s.nodes[ends.from]?.label ?? '?'} → ${s.nodes[ends.to]?.label ?? '?'}`;
+  const name = (id: string) => { const n = s.nodes[id]; return !n ? '?' : n.label || '(unnamed)'; };
+  return `${name(ends.from)} → ${name(ends.to)}`;
 }
 
 /** Steps per edge (an edge can appear in several steps, e.g. a request and its response). */

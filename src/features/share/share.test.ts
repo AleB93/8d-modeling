@@ -181,6 +181,25 @@ describe('shareUrl', () => {
   });
 });
 
+describe('share links with pages', () => {
+  it('round-trips pages and which page each floor is on', async () => {
+    const s = emptyScene();
+    s.pages!.push({ id: 'p2', name: 'Ops' });
+    s.layers.push({ id: 'l2', name: 'Ground', visible: true, page: 'p2' }, { id: 'l3', name: 'Hidden', visible: false, page: 'p2' });
+    const back = (await decodeShare('#' + encodeShare(s)))!.scene;
+    expect(back.pages).toEqual(s.pages);
+    expect(back.layers).toEqual(s.layers);
+  });
+  it('leaves pages out for scenes saved before pages', async () => {
+    const s = emptyScene();
+    delete s.pages;
+    delete s.layers[0].page;
+    const back = (await decodeShare('#' + encodeShare(s)))!.scene;
+    expect(back).not.toHaveProperty('pages');
+    expect(back.layers[0]).not.toHaveProperty('page');
+  });
+});
+
 function pick(d: (typeof KINDS)[keyof typeof KINDS]) {
   return { w: d.w, h: d.h, height: d.height, color: d.color, capacity: d.capacity, latency: d.latency };
 }

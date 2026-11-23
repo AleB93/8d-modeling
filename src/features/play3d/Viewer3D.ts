@@ -4,6 +4,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import type { Store } from '../../shared/model/store';
 import { isNodeId, Journey, KINDS, NodeKind, SNode, Stop, uid } from '../../shared/model/types';
 import { journeyEdges, journeyNodes, tokenAt } from '../journeys/journeys';
+import { layerLevels, layerShifts, pagePlacements, pagesOf, PagePlacement } from '../../shared/model/pages';
 import { Simulation, SimResult } from '../simulation/sim';
 import type { View2D } from '../design/DesignCanvas';
 
@@ -168,6 +169,9 @@ export class Viewer3D {
   private jc: { j: Journey; step: number; nodes: Set<string>; edges: Map<string, number[]> } | null = null;
   private sun: THREE.DirectionalLight;
   private layerY = new Map<string, number>();
+  private layerDx = new Map<string, number>();
+  private placements = new Map<string, PagePlacement>();
+  private maxLevel = 0;
   private visibleLayers = new Set<string>();
 
   private dirty = true;
@@ -222,11 +226,11 @@ export class Viewer3D {
     this.scene.add(sun, sun.target);
     this.sun = sun;
 
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(800, 800), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1 }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1 }));
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.02;
     ground.receiveShadow = true;
-    const grid = new THREE.GridHelper(800, 400, '#252c3a', '#171c26');
+    const grid = new THREE.GridHelper(3000, 1500, '#252c3a', '#171c26');
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.7;
     this.scene.add(ground, grid);
@@ -394,6 +398,11 @@ export class Viewer3D {
     return this.layerY.get(n.layer) ?? 0;
   }
 
+  /** x of a node in the shared 3D ground: its 2D x shifted by its page's place (see pagePlacements). */
+  private nx(n: SNode) {
+    return n.x + (this.layerDx.get(n.layer) ?? 0);
+  }
+
   private rebuild() {
     this.dirty = false;
     const sc = this.store.scene;
@@ -402,8 +411,12 @@ export class Viewer3D {
     if (!this.jc && !this.flowsOn && !this.simOn) this.particles.geometry.setDrawRange(0, 0);
     this.layerY.clear();
     this.visibleLayers.clear();
-    sc.layers.forEach((l, i) => {
-      this.layerY.set(l.id, i * LAYER_GAP * S);
+    const levels = layerLevels(sc);
+    this.layerDx = layerShifts(sc);
+    this.placements = pagePlacements(sc);
+    this.maxLevel = Math.max(0, ...levels.values());
+    sc.layers.forEach((l) => {
+      this.layerY.set(l.id, levels.get(l.id)! * LAYER_GAP * S);
       if (l.visible) this.visibleLayers.add(l.id);
     });
 
@@ -413,8 +426,8 @@ export class Viewer3D {
       if (!this.visibleLayers.has(n.layer)) continue;
       groups.get(n.kind)?.push(n);
       const y = this.nodeBase(n);
-      bb.expandByPoint(v3.set(n.x * S, y, n.y * S));
-      bb.expandByPoint(v3.set((n.x + n.w) * S, y + n.height * S, (n.y + n.h) * S));
+      bb.expandByPoint(v3.set(this.nx(n) * S, y, n.y * S));
+      bb.expandByPoint(v3.set((this.nx(n) + n.w) * S, y + n.height * S, (n.y + n.h) * S));
     }
 
     for (const [kind, list] of groups) {
@@ -429,7 +442,7 @@ export class Viewer3D {
       list.forEach((n, i) => {
         const base = this.nodeBase(n);
         const h = kind === 'zone' ? 0.05 : Math.max(2, n.height) * S;
-        m4.compose(v3.set((n.x + n.w / 2) * S, base + (kind === 'zone' ? 0.01 : 0), (n.y + n.h / 2) * S), q4.identity(), v3b.set(n.w * S, h, n.h * S));
+        m4.compose(v3.set((this.nx(n) + n.w / 2) * S, base + (kind === 'zone' ? 0.01 : 0), (n.y + n.h / 2) * S), q4.identity(), v3b.set(n.w * S, h, n.h * S));
         km.mesh.setMatrixAt(i, m4);
       });
       km.mesh.count = list.length;
@@ -498,8 +511,8 @@ export class Viewer3D {
     for (const e of Object.values(sc.edges)) {
       const a = sc.nodes[e.from], b = sc.nodes[e.to];
       if (!a || !b || !this.visibleLayers.has(a.layer) || !this.visibleLayers.has(b.layer)) continue;
-      p0.set((a.x + a.w / 2) * S, this.nodeBase(a) + a.height * S * 0.5, (a.y + a.h / 2) * S);
-      p1.set((b.x + b.w / 2) * S, this.nodeBase(b) + b.height * S * 0.5, (b.y + b.h / 2) * S);
+      p0.set((this.nx(a) + a.w / 2) * S, this.nodeBase(a) + a.height * S * 0.5, (a.y + a.h / 2) * S);
+      p1.set((this.nx(b) + b.w / 2) * S, this.nodeBase(b) + b.height * S * 0.5, (b.y + b.h / 2) * S);
       const d = p0.distanceTo(p1);
       mid.lerpVectors(p0, p1, 0.5);
       mid.y = Math.max(p0.y, p1.y) + 0.6 + d * 0.18;
@@ -680,11 +693,11 @@ export class Viewer3D {
       const base = this.nodeBase(n);
       const sel = this.store.selection.has(n.id);
       if (n.kind === 'zone') {
-        put(n.id, n.label, '', n.color, (n.x + 70) * S, base + 0.1, (n.y + 10) * S, 0.45, sel);
+        put(n.id, n.label, '', n.color, (this.nx(n) + 70) * S, base + 0.1, (n.y + 10) * S, 0.45, sel);
         continue;
       }
       if (n.kind === 'text') {
-        put(n.id, n.label.split('\n')[0], '', n.color, (n.x + n.w / 2) * S, base + 0.3, (n.y + n.h / 2) * S, 0.6, sel);
+        put(n.id, n.label.split('\n')[0], '', n.color, (this.nx(n) + n.w / 2) * S, base + 0.3, (n.y + n.h / 2) * S, 0.6, sel);
         continue;
       }
       let sub = '';
@@ -698,19 +711,25 @@ export class Viewer3D {
           else if (st.drop > 0.001) sub += ` · ${(st.drop * 100).toFixed(0)}% drop`;
         }
       }
-      put(n.id, n.label, sub, n.color, (n.x + n.w / 2) * S, base + n.height * S + 0.25, (n.y + n.h / 2) * S, 0.6, sel);
+      put(n.id, n.label, sub, n.color, (this.nx(n) + n.w / 2) * S, base + n.height * S + 0.25, (n.y + n.h / 2) * S, 0.6, sel);
     }
     const byLayer = new Map<string, [number, number]>();
     for (const n of Object.values(sc.nodes)) {
       const m = byLayer.get(n.layer);
-      if (!m) byLayer.set(n.layer, [n.x, n.y]);
-      else { m[0] = Math.min(m[0], n.x); m[1] = Math.min(m[1], n.y); }
+      if (!m) byLayer.set(n.layer, [this.nx(n), n.y]);
+      else { m[0] = Math.min(m[0], this.nx(n)); m[1] = Math.min(m[1], n.y); }
     }
     sc.layers.forEach((l, i) => {
       const m = byLayer.get(l.id);
       if (!l.visible || !m) return;
-      put('L:' + l.id, l.name, '', '#6ea8ff', (m[0] - 60) * S + 1.2, i * LAYER_GAP * S + 0.05, (m[1] - 60) * S, 0.5, true);
+      put('L:' + l.id, l.name, '', '#6ea8ff', (m[0] - 60) * S + 1.2, this.layerY.get(l.id)! + 0.05, (m[1] - 60) * S, 0.5, true);
     });
+    if (pagesOf(sc).length > 1) {
+      for (const pg of pagesOf(sc)) {
+        const p = this.placements.get(pg.id)!;
+        put('P:' + pg.id, pg.name, '', '#f5f7fb', (p.x0 + p.dx - 120) * S + 2, 0.05, (p.y0 - 170) * S, 1.6, true);
+      }
+    }
     // journey step labels sit on their connection, a little toward the step's start
     if (this.jc) {
       const { j, step } = this.jc;
@@ -782,18 +801,12 @@ export class Viewer3D {
     this.needsRender = true;
   }
 
-  /** Translucent glass floor under every elevated layer. */
+  /** Translucent glass floor under every elevated layer, and a ground plate per page when there are several. */
   private buildSlabs() {
     this.slabGroup.clear();
     const sc = this.store.scene;
-    sc.layers.forEach((l, i) => {
-      if (!l.visible || i === 0) return;
-      const ns = Object.values(sc.nodes).filter((n) => n.layer === l.id);
-      if (!ns.length) return;
-      const pad = 60;
-      const x0 = Math.min(...ns.map((n) => n.x)) - pad, z0 = Math.min(...ns.map((n) => n.y)) - pad;
-      const x1 = Math.max(...ns.map((n) => n.x + n.w)) + pad, z1 = Math.max(...ns.map((n) => n.y + n.h)) + pad;
-      const y = i * LAYER_GAP * S - 0.06;
+    const pad = 60;
+    const slab = (x0: number, x1: number, z0: number, z1: number, y: number) => {
       const mesh = new THREE.Mesh(this.slabGeo, this.slabMat);
       const line = new THREE.LineSegments(this.slabEdges, this.slabLineMat);
       for (const o of [mesh, line]) {
@@ -802,7 +815,18 @@ export class Viewer3D {
         o.renderOrder = -1;
         this.slabGroup.add(o);
       }
-    });
+    };
+    for (const l of sc.layers) {
+      const y = this.layerY.get(l.id) ?? 0;
+      if (!l.visible || y === 0) continue;
+      const ns = Object.values(sc.nodes).filter((n) => n.layer === l.id);
+      if (!ns.length) continue;
+      const x0 = Math.min(...ns.map((n) => this.nx(n))) - pad, z0 = Math.min(...ns.map((n) => n.y)) - pad;
+      const x1 = Math.max(...ns.map((n) => this.nx(n) + n.w)) + pad, z1 = Math.max(...ns.map((n) => n.y + n.h)) + pad;
+      slab(x0, x1, z0, z1, y - 0.06);
+    }
+    if (pagesOf(sc).length < 2) return;
+    for (const p of this.placements.values()) slab(p.x0 + p.dx - pad * 2, p.x1 + p.dx + pad * 2, p.y0 - pad * 2, p.y1 + pad * 2, -0.03);
   }
 
   private buildSelection() {
@@ -816,8 +840,8 @@ export class Viewer3D {
       const base = this.nodeBase(n);
       const p = 0.08;
       const box = new THREE.Box3(
-        new THREE.Vector3(n.x * S - p, base - p, n.y * S - p),
-        new THREE.Vector3((n.x + n.w) * S + p, base + Math.max(2, n.height) * S + p, (n.y + n.h) * S + p),
+        new THREE.Vector3(this.nx(n) * S - p, base - p, n.y * S - p),
+        new THREE.Vector3((this.nx(n) + n.w) * S + p, base + Math.max(2, n.height) * S + p, (n.y + n.h) * S + p),
       );
       this.selGroup.add(new THREE.Box3Helper(box, new THREE.Color('#6ea8ff')));
     }
@@ -828,8 +852,8 @@ export class Viewer3D {
       const base = this.nodeBase(hn);
       const p = 0.2;
       const box = new THREE.Box3(
-        new THREE.Vector3(hn.x * S - p, base - p, hn.y * S - p),
-        new THREE.Vector3((hn.x + hn.w) * S + p, base + Math.max(2, hn.height) * S + p, (hn.y + hn.h) * S + p),
+        new THREE.Vector3(this.nx(hn) * S - p, base - p, hn.y * S - p),
+        new THREE.Vector3((this.nx(hn) + hn.w) * S + p, base + Math.max(2, hn.height) * S + p, (hn.y + hn.h) * S + p),
       );
       this.selGroup.add(new THREE.Box3Helper(box, new THREE.Color(this.jc.j.color)));
     }
@@ -1000,7 +1024,7 @@ export class Viewer3D {
   focusNode(id: string) {
     const n = this.store.scene.nodes[id];
     if (!n) return;
-    const t = new THREE.Vector3((n.x + n.w / 2) * S, this.nodeBase(n) + n.height * S * 0.5, (n.y + n.h / 2) * S);
+    const t = new THREE.Vector3((this.nx(n) + n.w / 2) * S, this.nodeBase(n) + n.height * S * 0.5, (n.y + n.h / 2) * S);
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
     const dist = Math.max(n.w, n.h) * S * 2.5 + 5;
     this.flyTo(t.clone().addScaledVector(dir, dist), t, 700);
@@ -1013,8 +1037,8 @@ export class Viewer3D {
     for (const n of Object.values(this.store.scene.nodes)) {
       if (!this.visibleLayers.has(n.layer)) continue;
       const base = this.nodeBase(n);
-      box.expandByPoint(new THREE.Vector3(n.x * S, base, n.y * S));
-      box.expandByPoint(new THREE.Vector3((n.x + n.w) * S, base + n.height * S, (n.y + n.h) * S));
+      box.expandByPoint(new THREE.Vector3(this.nx(n) * S, base, n.y * S));
+      box.expandByPoint(new THREE.Vector3((this.nx(n) + n.w) * S, base + n.height * S, (n.y + n.h) * S));
     }
     if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(10, 1, 10));
     const sphere = box.getBoundingSphere(new THREE.Sphere());
@@ -1036,13 +1060,14 @@ export class Viewer3D {
     this.start();
     if (this.dirty) this.rebuild();
     const d = this.topDownDistance(v.width);
-    const t = new THREE.Vector3(v.cx * S, 0, v.cy * S);
+    const dx = this.placements.get(this.store.activePage)?.dx ?? 0;
+    const t = new THREE.Vector3((v.cx + dx) * S, 0, v.cy * S);
     this.camera.position.set(t.x, d, t.z + d * 0.001);
     this.controls.target.copy(t);
     this.camera.lookAt(t);
     this.needsRender = true;
     // aim at the vertical middle of the stack, pulled back enough to see every floor
-    const top = (this.store.scene.layers.length - 1) * LAYER_GAP * S;
+    const top = this.maxLevel * LAYER_GAP * S;
     const lift = new THREE.Vector3(t.x, top * 0.5, t.z);
     const k = Math.max(d, top * 2.2) * 1.15;
     await this.flyTo(new THREE.Vector3(t.x + k * 0.3, top * 0.5 + k * 0.62, t.z + k * 0.78), lift, 1000);
@@ -1057,7 +1082,21 @@ export class Viewer3D {
     const fov = THREE.MathUtils.degToRad(this.camera.fov);
     const width = (2 * d * Math.tan(fov / 2) * this.camera.aspect) / S;
     this.stop();
-    return { cx: t.x / S, cy: t.z / S, width };
+    // come back to 2D on the page under the camera
+    const page = this.pageAt(t.x / S);
+    if (page) this.store.openPage(page);
+    const dx = this.placements.get(this.store.activePage)?.dx ?? 0;
+    return { cx: t.x / S - dx, cy: t.z / S, width };
+  }
+
+  /** Page whose area on the ground is nearest to 3D x (world px). */
+  private pageAt(x: number): string | null {
+    let best: string | null = null, bd = Infinity;
+    for (const [id, p] of this.placements) {
+      const d = x < p.x0 + p.dx ? p.x0 + p.dx - x : x > p.x1 + p.dx ? x - p.x1 - p.dx : 0;
+      if (d < bd) { bd = d; best = id; }
+    }
+    return best;
   }
 
   captureStop(name: string): Stop {

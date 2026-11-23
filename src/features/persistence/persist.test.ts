@@ -109,7 +109,7 @@ describe('validateScene', () => {
 
   it('keeps existing stops', () => {
     const stops = [{ id: 's', name: 'S', pos: [1, 2, 3], target: [0, 0, 0] }];
-    expect(validateScene({ ...emptyScene(), stops }).stops).toBe(stops);
+    expect(validateScene({ ...emptyScene(), stops }).stops).toEqual(stops);
   });
 
   it('sanitizes journeys: drops malformed ones, defaults name and color, prunes dangling steps', () => {
@@ -172,5 +172,51 @@ describe('download', () => {
     expect(revoke).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1000);
     expect(revoke).toHaveBeenCalledWith('blob:x');
+  });
+});
+
+describe('validateScene pages', () => {
+  it('keeps valid pages and drops broken ones', () => {
+    const s: any = emptyScene();
+    s.pages = [{ id: 'p1', name: 'One' }, { id: 'p2' }, null, { name: 'no id' }];
+    expect(validateScene(s).pages).toEqual([{ id: 'p1', name: 'One' }, { id: 'p2', name: 'Page' }]);
+  });
+  it('removes pages that are empty or not a list', () => {
+    const s: any = emptyScene();
+    s.pages = [];
+    expect(validateScene(s)).not.toHaveProperty('pages');
+    s.pages = 'x';
+    expect(validateScene(s)).not.toHaveProperty('pages');
+  });
+});
+
+describe('validateScene repairs', () => {
+  it('fills in or fixes every field the app relies on', () => {
+    const s = validateScene({
+      nodes: {
+        a: { kind: 'service', layer: 'l1', x: 'x', y: Infinity, color: 5 },
+        bad: { kind: 'bogus', layer: 'l1' },
+        nul: null,
+      },
+      edges: {
+        e: { from: 'a', to: 'a', mult: NaN, flow: false, label: 'L', dashed: 1 },
+        dangling: { from: 'a', to: 'gone' },
+        plain: { from: 'a', to: 'a' },
+      },
+      layers: [{ id: 'l1', page: 7 }, { id: 'l1', name: 'dup' }, null, { id: 'l2', name: 'Top', visible: false, page: 'p1' }],
+      pages: [{ id: 'p1' }, { id: 'p1', name: 'dup' }],
+      stops: [{ id: 's', name: 'S', pos: [0, 0, 0], target: [0, 0, 0] }, { id: 'broken' }],
+    });
+    expect(s.layers).toEqual([{ id: 'l1', name: 'Floor', visible: true }, { id: 'l2', name: 'Top', visible: false, page: 'p1' }]);
+    expect(s.pages).toEqual([{ id: 'p1', name: 'Page' }]);
+    expect(Object.keys(s.nodes)).toEqual(['a']);
+    expect(s.nodes.a).toMatchObject({ id: 'a', x: 0, y: 0, w: 160, color: '#4f7cff', label: '', capacity: 800 });
+    expect(s.edges.e).toMatchObject({ id: 'e', label: 'L', dashed: true, mult: 1, flow: false });
+    expect(s.edges.plain).toMatchObject({ label: '', dashed: false, mult: 1, flow: true });
+    expect(s.edges).not.toHaveProperty('dangling');
+    expect(s.stops.map((x) => x.id)).toEqual(['s']);
+  });
+  it('rejects a scene with no usable floor', () => {
+    expect(() => validateScene({ nodes: {}, edges: {}, layers: [null, { name: 'no id' }] })).toThrow('Not an 8D modeling scene');
   });
 });

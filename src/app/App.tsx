@@ -70,6 +70,16 @@ export default function App() {
     saveT = window.setTimeout(() => idbSet('scene', store.scene).catch(() => {}), 400);
   });
 
+  // opening another page in 2D frames it
+  let lastPage = '';
+  store.subscribe(() => {
+    const p = store.activePage;
+    if (p === lastPage) return;
+    const first = !lastPage;
+    lastPage = p;
+    if (!first && mode() === 'design' && design) queueMicrotask(() => design.fit());
+  });
+
   const replaceScene = (s: Scene) => {
     store.checkpoint();
     store.load(s, false);

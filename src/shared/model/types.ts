@@ -33,6 +33,14 @@ export interface Layer {
   id: string;
   name: string;
   visible: boolean;
+  /** Page this floor belongs to (absent: the first page). */
+  page?: string;
+}
+
+/** An independent diagram in the scene, with its own floors. See pages.ts. */
+export interface Page {
+  id: string;
+  name: string;
 }
 
 export interface Stop {
@@ -64,7 +72,9 @@ export interface Scene {
   v: 1;
   nodes: Record<string, SNode>;
   edges: Record<string, SEdge>;
-  layers: Layer[]; // index 0 = bottom floor
+  layers: Layer[]; // index 0 = bottom floor (per page)
+  /** Pages in order (absent in scenes saved before pages: one page holding every floor). */
+  pages?: Page[];
   stops: Stop[];
   journeys: Journey[];
 }
@@ -116,7 +126,8 @@ export function makeEdge(from: string, to: string, over: Partial<SEdge> = {}): S
 }
 
 export function emptyScene(): Scene {
-  return { v: 1, nodes: {}, edges: {}, layers: [{ id: uid('l'), name: 'Ground', visible: true }], stops: [], journeys: [] };
+  const page = { id: uid('p'), name: 'Page 1' };
+  return { v: 1, nodes: {}, edges: {}, layers: [{ id: uid('l'), name: 'Ground', visible: true, page: page.id }], pages: [page], stops: [], journeys: [] };
 }
 
 export const isNodeId = (id: string) => id.startsWith('n_');

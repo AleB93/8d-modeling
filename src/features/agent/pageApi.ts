@@ -67,7 +67,8 @@ export function createPageApi(loadTools: () => Promise<ToolDef[]>, docs: string)
       tools: await list(),
     }),
     tools: new Proxy({} as PageApi['tools'], {
-      get: (_t, name) => (typeof name === 'string' ? (input?: unknown) => call(name, input) : undefined),
+      // not thenable (`await modeling8d.tools` must not hang) and no symbol keys
+      get: (_t, name) => (typeof name === 'string' && name !== 'then' ? (input?: unknown) => call(name, input) : undefined),
     }),
   };
 }

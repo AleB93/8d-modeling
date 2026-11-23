@@ -246,7 +246,7 @@ describe('selection and layers', () => {
     const loner = makeNode('service', 1000, 1000, L);
     st.update((s) => { for (const n of [zone, inside, partly, otherLayer, loner]) s.nodes[n.id] = n; });
     const e = makeEdge(inside.id, loner.id);
-    expect(st.moveSet([zone.id, e.id, 'n_missing']).sort()).toEqual([zone.id, inside.id, 'n_missing'].sort());
+    expect(st.moveSet([zone.id, e.id, 'n_missing']).sort()).toEqual([zone.id, inside.id].sort()); // ids that aren't boxes are ignored
     expect(st.moveSet([loner.id])).toEqual([loner.id]);
   });
 
@@ -401,10 +401,9 @@ describe('history grouping (squash / rollback)', () => {
     const st = new Store();
     addNode(st);
     const mark = st.historyMark();
-    const before = JSON.stringify(st.scene);
     addNode(st);
     addNode(st);
-    st.squash(mark, before);
+    st.squash(mark);
     expect(nodeCount(st)).toBe(3);
     st.undo();
     expect(nodeCount(st)).toBe(1);
@@ -414,18 +413,18 @@ describe('history grouping (squash / rollback)', () => {
     const st = new Store();
     addNode(st);
     const mark = st.historyMark();
-    st.squash(mark, JSON.stringify(st.scene));
-    expect(st.historyMark()).toBe(mark);
+    const depth = st.undoDepth;
+    st.squash(mark);
+    expect(st.undoDepth).toBe(depth);
   });
 
   it('rollback restores the scene and drops the history in between', () => {
     const st = new Store();
     addNode(st);
     const mark = st.historyMark();
-    const before = JSON.stringify(st.scene);
     addNode(st);
-    st.rollback(mark, before);
+    st.rollback(mark);
     expect(nodeCount(st)).toBe(1);
-    expect(st.historyMark()).toBe(mark);
+    expect(st.undoDepth).toBe(1);
   });
 });

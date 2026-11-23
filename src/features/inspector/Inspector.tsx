@@ -5,6 +5,7 @@ import { KINDS, PALETTE, SIM_KINDS } from '../../shared/model/types';
 import type { NodeKind, SEdge, SNode } from '../../shared/model/types';
 import { Icon } from '../../shared/ui/icons';
 import { fmt } from '../../shared/ui/format';
+import { pageLayers, pageOfLayer } from '../../shared/model/pages';
 
 function Swatches(props: { value?: string; set: (c: string) => void }) {
   return (
@@ -25,7 +26,12 @@ export function Inspector(props: { ver: () => number; simOn: () => boolean; stat
   const edges = createMemo(() => sel().map((id) => store.scene.edges[id]).filter(Boolean) as SEdge[], [], { equals: false });
   const single = createMemo(() => (nodes().length === 1 ? nodes()[0] : null), null, { equals: false });
   const edge = createMemo(() => (edges().length === 1 && !nodes().length ? edges()[0] : null), null, { equals: false });
-  const layers = createMemo(() => (props.ver(), store.scene.layers.slice().reverse()), [], { equals: false });
+  // floors of the selection's page (boxes can't move to another page: pages are independent)
+  const layers = createMemo(() => {
+    props.ver();
+    const first = nodes()[0];
+    return pageLayers(store.scene, first ? pageOfLayer(store.scene, first.layer) : store.activePage).reverse();
+  }, [], { equals: false });
 
   const setN = <K extends keyof SNode>(field: K, value: SNode[K], coalesce = true) =>
     store.update((s) => {
