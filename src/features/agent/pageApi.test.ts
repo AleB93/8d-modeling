@@ -47,6 +47,12 @@ describe('createPageApi', () => {
     expect(await api.call('nope')).toEqual({ error: expect.stringMatching(/^Unknown tool "nope". Available: modeling8d_echo, /) });
   });
 
+  it('batch() forwards the calls to the batch tool', async () => {
+    const batch = vi.fn(async (input: unknown) => JSON.stringify({ got: input }));
+    const api = createPageApi(async () => [tool('modeling8d_batch', batch)], 'docs');
+    expect(await api.batch([{ tool: 'get_scene' }])).toEqual({ got: { calls: [{ tool: 'get_scene' }] } });
+  });
+
   it('offers tools.<name>() for any name', async () => {
     const { api } = setup();
     expect(await api.tools.modeling8d_echo({ b: 2 })).toEqual({ got: { b: 2 } });

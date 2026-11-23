@@ -7,7 +7,7 @@ import type { SimResult } from '../features/simulation/sim';
 import { demoScene } from '../features/samples/demo';
 import { download, idbGet, idbSet, validateScene } from '../features/persistence/persist';
 import { decodeShare, shareUrl, ShareView } from '../features/share/share';
-import { emptyScene, Scene, SIM_KINDS } from '../shared/model/types';
+import { emptyScene, Scene, SIM_KINDS, Stop } from '../shared/model/types';
 import { STEP_MS } from '../features/journeys/journeys';
 import { Icon } from '../shared/ui/icons';
 import type { AgentUI } from '../features/agent/tools';
@@ -122,6 +122,21 @@ export default function App() {
       setFlows: (on) => { if (on !== flows()) toggleFlows(); },
       fit: () => design.fit(),
       captureView,
+      captureStop: async (name) => {
+        await toPlay();
+        if (!viewer) throw new Error('The 3D view is not available');
+        return captureStop(name);
+      },
+      goStop: async (i) => { await toPlay(); goStop(i); },
+      present: async (on) => {
+        if (!on) return void setPresent(null);
+        await toPlay();
+        startPresent();
+      },
+      overview: async () => { await toPlay(); viewer?.overview(); },
+      setMultiplier: setMultiplier,
+      playJourney: (id) => playJourney(id),
+      exportFile: (f) => (f === 'json' ? Promise.resolve(actions.exportJson()) : f === 'html' ? actions.exportHtml() : actions.exportPng()),
     };
     const loadTools = async () => (await import('../features/agent/tools')).createTools(store, agentUI);
     // Same tools for any agent that can run JavaScript here (e.g. Claude in Chrome), in every browser.
@@ -253,6 +268,14 @@ export default function App() {
     goStop(0);
   };
 
+  /** Current 3D camera as a tour stop, remembering the journey on screen. */
+  function captureStop(name: string): Stop {
+    const st = viewer!.captureStop(name);
+    if (store.journey) st.journey = store.journey.id;
+    return st;
+  }
+  const setMultiplier = (v: number) => { setMult(v); if (viewer) viewer.sim.multiplier = v; };
+
   // ---------- share-link view state ----------
   /** How you are looking at the scene right now, for share links. */
   function captureView(): ShareView {
@@ -340,20 +363,26 @@ export default function App() {
     newScene: () => { replaceScene(emptyScene()); toastMsg('New scene (Ctrl+Z to undo)'); },
     demo: () => replaceScene(demoScene()),
     importJson: () => fileIn.click(),
-    exportJson: () => download('system.8d-modeling.json', new Blob([JSON.stringify(store.scene, null, 2)], { type: 'application/json' })),
+    exportJson: () => {
+      download('system.8d-modeling.json', new Blob([JSON.stringify(store.scene, null, 2)], { type: 'application/json' }));
+      return 'system.8d-modeling.json';
+    },
     exportHtml: async () => {
       const { sceneToHtml } = await import('../features/export/html'); // lazy: pulls in three only for REVISION
       download('system-3d.html', new Blob([sceneToHtml(store.scene)], { type: 'text/html' }));
       toastMsg('Exported a standalone 3D viewer (needs internet to load three.js)');
+      return 'system-3d.html';
     },
     exportPng: async () => {
       if (mode() === 'play' && viewer) {
         const blob = await (await fetch(viewer.snapshot())).blob();
         download('system-3d.png', blob);
-      } else {
-        const b = await design.exportPNG();
-        if (b) download('system-2d.png', b);
+        return 'system-3d.png';
       }
+      const b = await design.exportPNG();
+      if (!b) throw new Error('Could not render the 2D view');
+      download('system-2d.png', b);
+      return 'system-2d.png';
     },
     share: async (withView: boolean) => {
       const url = shareUrl(store.scene, withView ? captureView() : undefined);
@@ -423,7 +452,7 @@ export default function App() {
                 <button onClick={actions.exportJson}>Export JSON</button>
                 <button onClick={actions.importJson}>Import JSON…</button>
                 <button onClick={actions.exportHtml}>Export HTML (3D viewer)</button>
-                <button onClick={actions.exportPng}>Export PNG ({mode() === 'play' ? '3D' : '2D'} view)</button>
+                <button onClick={() => actions.exportPng().catch((e: Error) => toastMsg(e.message))}>Export PNG ({mode() === 'play' ? '3D' : '2D'} view)</button>
                 <hr />
                 <button onClick={actions.demo}>Load demo system</button>
                 <button onClick={actions.newScene}>New empty scene</button>
@@ -459,13 +488,9 @@ export default function App() {
 
       <Show when={mode() === 'play'}>
         <Show when={simOn()}>
-          <SimPanel stats={stats} mult={mult} setMult={(v) => { setMult(v); if (viewer) viewer.sim.multiplier = v; }} />
+          <SimPanel stats={stats} mult={mult} setMult={setMultiplier} />
         </Show>
-        <TourPanel ver={ver} go={goStop} present={startPresent} capture={(name) => {
-          const st = viewer!.captureStop(name);
-          if (store.journey) st.journey = store.journey.id;
-          return st;
-        }} />
+        <TourPanel ver={ver} go={goStop} present={startPresent} capture={captureStop} />
         <div class="zoombar panel">
           <button class="icon" onClick={() => viewer?.overview()} title="Overview: show everything (Shift+1)"><Icon name="fit" /></button>
         </div>

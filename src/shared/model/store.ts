@@ -87,6 +87,25 @@ export class Store {
     }
   }
 
+  /** Undo-history position, for grouping several changes into one undo step (see `squash`). */
+  historyMark(): number { return this.past.length; }
+
+  /**
+   * Merge every undo entry since `mark` into one, so a group of changes undoes with a single Ctrl+Z.
+   * `before` is the scene JSON at the mark.
+   */
+  squash(mark: number, before: string) {
+    if (this.past.length <= mark) return;
+    this.past.length = mark;
+    this.past.push(before);
+  }
+
+  /** Throw away every change since `mark`: restore `before` and drop the history entries in between. */
+  rollback(mark: number, before: string) {
+    this.past.length = Math.min(this.past.length, mark);
+    this.load(JSON.parse(before), false);
+  }
+
   get canUndo() { return this.past.length > 0; }
   get canRedo() { return this.future.length > 0; }
 

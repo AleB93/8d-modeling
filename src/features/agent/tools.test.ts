@@ -24,6 +24,13 @@ beforeEach(() => {
     setFlows: vi.fn(),
     fit: vi.fn(),
     captureView: vi.fn(() => ({ mode: 'play' as const, sim: true })),
+    captureStop: vi.fn(),
+    goStop: vi.fn(),
+    present: vi.fn(),
+    overview: vi.fn(),
+    setMultiplier: vi.fn(),
+    playJourney: vi.fn(),
+    exportFile: vi.fn(),
   };
   tools = Object.fromEntries(createTools(store, ui as unknown as AgentUI).map((t) => [t.name, t]));
 });
@@ -42,11 +49,11 @@ async function seedChain() {
 }
 
 describe('tool definitions', () => {
-  it('exposes the 12 modeling8d tools with schemas', () => {
+  it('exposes the 16 modeling8d tools with schemas', () => {
     expect(Object.keys(tools)).toEqual([
       'modeling8d_get_scene', 'modeling8d_add_nodes', 'modeling8d_connect', 'modeling8d_update', 'modeling8d_delete',
       'modeling8d_layers', 'modeling8d_auto_layout', 'modeling8d_simulate', 'modeling8d_view', 'modeling8d_journeys',
-      'modeling8d_undo', 'modeling8d_share_link',
+      'modeling8d_undo', 'modeling8d_share_link', 'modeling8d_redo', 'modeling8d_tour', 'modeling8d_scene', 'modeling8d_batch',
     ]);
     for (const t of Object.values(tools)) {
       expect(t.title).toBeTruthy();

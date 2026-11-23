@@ -7,6 +7,7 @@ import type { ToolDef } from './tools';
 //   await modeling8d.help()                                  // how to use it + every tool's input schema
 //   await modeling8d.tools.modeling8d_get_scene()            // or modeling8d.call('get_scene')
 //   await modeling8d.call('add_nodes', { nodes: [...] })     // the "modeling8d_" prefix is optional
+//   await modeling8d.batch([{ tool: 'add_nodes', input }, { tool: 'connect', input }])  // all-or-nothing, one undo step
 //
 // Results are parsed JSON. Failures resolve to { error } instead of throwing, so an agent reading the
 // return value always sees what went wrong; nothing is changed when a call fails.
@@ -19,6 +20,8 @@ export interface PageApi {
   help(): Promise<{ about: string; docs: string; usage: string[]; tools: ToolInfo[] }>;
   list(): Promise<ToolInfo[]>;
   call(name: string, input?: unknown): Promise<unknown>;
+  /** Several calls as one change: all-or-nothing, and a single Ctrl+Z undoes them all. */
+  batch(calls: { tool: string; input?: unknown }[]): Promise<unknown>;
   /** `tools.<name>(input)`, for every tool name (with or without the "modeling8d_" prefix). */
   readonly tools: Record<string, (input?: unknown) => Promise<unknown>>;
 }
@@ -50,12 +53,14 @@ export function createPageApi(loadTools: () => Promise<ToolDef[]>, docs: string)
     docs,
     list,
     call,
+    batch: (calls) => call('batch', { calls }),
     help: async () => ({
       about: '8D modeling: system architecture diagrams in 2D and 3D. These tools edit the diagram open in this tab; every change shows live and can be undone with Ctrl+Z.',
       docs,
       usage: [
         'Read first: await modeling8d.call("get_scene")',
-        'Then edit: add_nodes → connect → auto_layout; journeys for user paths; simulate for load',
+        'Then edit: add_nodes → connect → auto_layout; journeys for user paths; simulate for load; tour for camera stops',
+        'Group edits with modeling8d.batch([{ tool, input }, ...]): all-or-nothing, one undo step',
         'Results are JSON; a failed call returns { error } and changes nothing',
         'Share the result: await modeling8d.call("share_link")',
       ],

@@ -13,6 +13,7 @@ await modeling8d.call('add_nodes', { nodes: [...] })
 ```
 
 - `modeling8d.call(name, input)` runs a tool. The `modeling8d_` prefix is optional. `modeling8d.tools.<name>(input)` does the same.
+- `modeling8d.batch([{ tool, input }, ...])` runs several calls as one change: if any fails, nothing changes, and one Ctrl+Z undoes them all. Prefer it for multi-step edits.
 - Results are plain JSON. A failed call returns `{ error: "..." }` and changes nothing: every call applies fully or not at all.
 - Every change appears live in the open tab, and the user can undo it with Ctrl+Z.
 - To read the diagram without JavaScript, use the hidden "Diagram outline" in the page structure. It lists floors, boxes, connections and journeys, and its buttons select a box or show a journey.
@@ -33,15 +34,40 @@ await modeling8d.call('add_nodes', { nodes: [...] })
 - `connect`: `{ edges: [{ from, to, label?, mult?, async? }], refs? }`. `from` and `to` accept a node id, a ref or an exact label.
 - `update`: `{ updates: [{ target, ...fields }] }`. Node fields: label, layer, x, y, w, h, height, color, capacity, latency, kind and `down` (failed). Edge fields: label, mult, async, from, to.
 - `delete`: `{ targets: [idOrLabel, ...] }`. Deleting a node also removes its connections.
-- `layers`: `{ action: "add" | "rename" | "reorder" | "show" | "hide", names?, target?, name? }`.
+- `layers`: `{ action: "add" | "rename" | "reorder" | "show" | "hide" | "delete" | "focus", names?, target?, name?, deleteNodes? }`. `delete` needs an empty floor unless `deleteNodes: true`. `focus` dims the other floors; `target: "all"` undims them.
 - `auto_layout`: `{ layers?: [name] }` arranges the diagram by dependency depth. Call it after adding nodes.
 - `simulate` (read-only): `{ multiplier?, seconds?, down?: [idOrLabel] }` returns throughput, errors, latency and bottlenecks.
-- `journeys`: `{ action: "list" | "create" | "update" | "delete" | "show", id?, name?, color?, start?, steps?: [{ to, note? }], step? }`. Each hop follows the existing connections.
-- `view`: `{ mode?: "design" | "play", simulate?, flows?, focus?, fit? }` controls what the user sees (2D editor or 3D).
-- `undo`: `{ steps? }`.
+- `journeys`: `{ action: "list" | "create" | "update" | "delete" | "show" | "play", id?, name?, color?, start?, steps?: [{ to, note? }], step? }`. Each hop follows the existing connections. `play` animates it step by step.
+- `view`: `{ mode?: "design" | "play", simulate?, flows?, multiplier?, focus?, fit?, overview? }` controls what the user sees: 2D editor or 3D, live simulation and its load, a focused box, or a 3D overview.
+- `tour`: `{ action: "list" | "add" | "update" | "rename" | "delete" | "reorder" | "go" | "present" | "stop", target?, name?, names? }` manages saved 3D camera views. `add` saves the current view (with the journey on screen). `target` is a stop name, id or 1-based number.
+- `scene`: `{ action: "new" | "demo" | "load" | "export", scene?, format?: "json" | "html" | "png" }`. `export` as JSON returns the scene, which `load` accepts. HTML and PNG download a file for the user. `new`, `demo` and `load` can be undone.
+- `undo` / `redo`: `{ steps? }`.
+- `batch`: `{ calls: [{ tool, input }] }` (also `modeling8d.batch(calls)`), all-or-nothing and one undo step.
 - `share_link` (read-only): `{ includeView? }` returns a URL that opens this exact diagram. The whole scene is compressed into the link, and nothing is uploaded.
 
 ## Example: build a small system
+
+```js
+await modeling8d.batch([
+  { tool: 'scene', input: { action: 'new' } },
+  { tool: 'add_nodes', input: { nodes: [
+    { kind: 'client', label: 'Web app', layer: 'Edge', capacity: 300 },
+    { kind: 'service', label: 'API', layer: 'Services' },
+    { kind: 'database', label: 'Postgres', layer: 'Data' },
+  ] } },
+  { tool: 'connect', input: { edges: [{ from: 'Web app', to: 'API' }, { from: 'API', to: 'Postgres', mult: 0.3 }] } },
+  { tool: 'layers', input: { action: 'delete', target: 'Ground' } },   // the new scene's empty default floor
+  { tool: 'auto_layout' },
+])
+await modeling8d.call('journeys', { action: 'create', name: 'Load page', start: 'Web app',
+  steps: [{ to: 'API', note: 'GET /' }, { to: 'Postgres', note: 'query' }, { to: 'API' }, { to: 'Web app', note: '200 OK' }] })
+await modeling8d.call('view', { mode: 'play', overview: true })
+await modeling8d.call('tour', { action: 'add', name: 'Overview' })
+await modeling8d.call('simulate', { multiplier: 2 })
+await modeling8d.call('share_link')
+```
+
+The same thing one call at a time:
 
 ```js
 await modeling8d.call('add_nodes', { nodes: [

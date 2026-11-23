@@ -34,6 +34,7 @@ Any agent that can run JavaScript in the page can drive the app through **`windo
 await modeling8d.help()                    // usage + every tool with its input schema
 await modeling8d.call('get_scene')         // results are JSON; failures return { error } and change nothing
 await modeling8d.call('add_nodes', { nodes: [{ kind: 'service', label: 'API' }] })
+await modeling8d.batch([{ tool: 'add_nodes', input: {...} }, { tool: 'connect', input: {...} }])  // one undo step
 ```
 
 - **Agent guide:** [`llms.txt`](public/llms.txt) is served next to the app and linked from the page's `<head>`.
@@ -51,12 +52,15 @@ await modeling8d.call('add_nodes', { nodes: [{ kind: 'service', label: 'API' }] 
 | `modeling8d_connect` | Batch-add directed connections (by id, ref or label), with calls-per-request and async |
 | `modeling8d_update` | Change node/edge fields, move between floors, mark nodes `down` |
 | `modeling8d_delete` | Remove nodes/edges |
-| `modeling8d_layers` | Add / rename / reorder / show / hide floors |
+| `modeling8d_layers` | Add / rename / reorder / show / hide / delete floors, focus one floor |
 | `modeling8d_auto_layout` | Lay nodes out by dependency depth, each floor in its own block |
 | `modeling8d_simulate` | Run the traffic simulation headlessly (load multiplier, what-if failures) → totals + bottlenecks (read-only) |
-| `modeling8d_journeys` | List / create / update / delete user journeys (start node + hops with captions) and show one on screen |
-| `modeling8d_view` | Switch 2D/3D, toggle simulation/flows, focus a node |
-| `modeling8d_undo` | Undo recent changes |
+| `modeling8d_journeys` | List / create / update / delete user journeys (start node + hops with captions), show or play one |
+| `modeling8d_view` | Switch 2D/3D, toggle simulation/flows, set live load, focus a node, fit, 3D overview |
+| `modeling8d_tour` | Save / update / rename / reorder / delete 3D camera stops, fly to one, present |
+| `modeling8d_scene` | New or demo scene, load a scene JSON, export JSON (returned) or HTML/PNG (downloaded) |
+| `modeling8d_undo` / `modeling8d_redo` | Undo / redo recent changes |
+| `modeling8d_batch` | Several calls as one all-or-nothing change, undone with a single Ctrl+Z |
 | `modeling8d_share_link` | URL with the whole scene compressed into it (read-only) |
 
 Each tool call applies fully or not at all: if anything in a batch fails, the scene is restored.

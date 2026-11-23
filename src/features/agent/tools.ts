@@ -3,7 +3,9 @@
 // agent's edits show up live in 2D/3D and can be undone with Ctrl+Z like any user edit.
 
 import type { Store } from '../../shared/model/store';
-import { JOURNEY_COLORS, Journey, JStep, KINDS, makeEdge, makeNode, NodeKind, Scene, SEdge, SNode, uid } from '../../shared/model/types';
+import { emptyScene, JOURNEY_COLORS, Journey, JStep, KINDS, makeEdge, makeNode, NodeKind, Scene, SEdge, SNode, Stop, uid } from '../../shared/model/types';
+import { validateScene } from '../persistence/persist';
+import { demoScene } from '../samples/demo';
 import { findPath, stepEnds } from '../journeys/journeys';
 import { Simulation } from '../simulation/sim';
 import { shareUrl, ShareView } from '../share/share';
@@ -16,6 +18,20 @@ export interface AgentUI {
   fit(): void;
   /** Current mode, camera, tour stop, simulation and selection, for share links. */
   captureView(): ShareView;
+  /** 3D camera position of the current view (switching to 3D first), carrying the shown journey. */
+  captureStop(name: string): Promise<Stop>;
+  /** Fly to tour stop `index` (0-based) in 3D. */
+  goStop(index: number): Promise<void>;
+  /** Start (from the first stop) or end the full-screen tour presentation. */
+  present(on: boolean): Promise<void>;
+  /** 3D camera reset that frames everything (switches to 3D). */
+  overview(): Promise<void>;
+  /** Live simulation load multiplier (1 = clients' own rate). */
+  setMultiplier(m: number): void;
+  /** Animate a journey step by step, as the Play button does. */
+  playJourney(id: string): void;
+  /** Download the scene for the user. Resolves to the file name. */
+  exportFile(format: 'json' | 'html' | 'png'): Promise<string>;
 }
 
 export interface ToolDef {
@@ -198,7 +214,7 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
     latency: { type: 'number', description: 'Simulation: base latency in ms' },
   };
 
-  return [
+  const tools: ToolDef[] = [
     {
       name: 'modeling8d_get_scene',
       title: 'Read diagram',
@@ -384,18 +400,30 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
     {
       name: 'modeling8d_layers',
       title: 'Manage floors',
-      description: 'Manage floors. Actions: add (names, appended on top), rename (target, name), reorder (names bottom→top, all floors), show/hide (target).',
+      description:
+        'Manage floors. Actions: add (names, appended on top), rename (target, name), reorder (names bottom→top, all floors), show/hide (target), ' +
+        'delete (target; it must be empty unless deleteNodes is true; the last floor can\'t be deleted), focus (target, or "all" to stop dimming other floors).',
       inputSchema: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['add', 'rename', 'reorder', 'show', 'hide'] },
+          action: { type: 'string', enum: ['add', 'rename', 'reorder', 'show', 'hide', 'delete', 'focus'] },
           names: { type: 'array', items: { type: 'string' } },
-          target: { type: 'string', description: 'Layer name or id' },
+          target: { type: 'string', description: 'Layer name or id ("all" for focus)' },
           name: { type: 'string' },
+          deleteNodes: { type: 'boolean', description: 'delete: also delete the boxes on that floor (and their connections)' },
         },
         required: ['action'],
       },
-      execute: guard(({ action, names, target, name }: any) => {
+      execute: guard(({ action, names, target, name, deleteNodes }: any) => {
+        if (action === 'focus') {
+          if (String(target).toLowerCase() === 'all') store.setAllLayers(true);
+          else {
+            const l = store.scene.layers.find((x) => x.id === target || x.name.toLowerCase() === String(target).toLowerCase());
+            if (!l) throw new ToolError(`No layer "${target}"`);
+            store.focusLayer(l.id);
+          }
+          return { focus: store.allLayers ? 'all' : store.scene.layers.find((l) => l.id === store.activeLayer)!.name };
+        }
         store.transact((s) => {
           const find = (r: string) => {
             const l = s.layers.find((x) => x.id === r || x.name.toLowerCase() === String(r).toLowerCase());
@@ -405,6 +433,15 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
           if (action === 'add') for (const nm of names ?? []) s.layers.push({ id: uid('l'), name: nm, visible: true });
           else if (action === 'rename') find(target).name = String(name);
           else if (action === 'show' || action === 'hide') find(target).visible = action === 'show';
+          else if (action === 'delete') {
+            const l = find(target);
+            if (s.layers.length === 1) throw new ToolError('Can\'t delete the only floor');
+            const on = Object.values(s.nodes).filter((n) => n.layer === l.id);
+            if (on.length && !deleteNodes) throw new ToolError(`Floor "${l.name}" has ${on.length} ${on.length === 1 ? 'box' : 'boxes'}; pass deleteNodes: true to delete them too, or move them first`);
+            for (const n of on) delete s.nodes[n.id];
+            for (const e of Object.values(s.edges)) if (!s.nodes[e.from] || !s.nodes[e.to]) delete s.edges[e.id];
+            s.layers = s.layers.filter((x) => x.id !== l.id);
+          }
           else if (action === 'reorder') {
             const order = (names ?? []).map(find);
             if (order.length !== s.layers.length) throw new ToolError('reorder needs every layer name exactly once, bottom → top');
@@ -478,7 +515,8 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       name: 'modeling8d_view',
       title: 'Change view',
       description:
-        'Control what the user sees: switch between the 2D editor ("design") and the 3D view ("play"), start/stop the live simulation and animated flows in 3D, and focus a node.',
+        'Control what the user sees: switch between the 2D editor ("design") and the 3D view ("play"), start/stop the live simulation and animated flows in 3D, set the live load multiplier, ' +
+        'focus a node, zoom 2D to fit, or reset the 3D camera to an overview of everything.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -487,12 +525,19 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
           flows: { type: 'boolean' },
           focus: { type: 'string', description: 'Node id or label to center on' },
           fit: { type: 'boolean', description: 'Zoom 2D to fit everything' },
+          overview: { type: 'boolean', description: '3D camera reset showing everything (switches to 3D)' },
+          multiplier: { type: 'number', minimum: 0, description: 'Live simulation load: 2 = double every client\'s traffic' },
         },
       },
-      execute: guard(async ({ mode, simulate, flows, focus, fit }: any) => {
+      execute: guard(async ({ mode, simulate, flows, focus, fit, overview, multiplier }: any) => {
         if (mode) await ui.setMode(mode);
         if (simulate != null) ui.setSimulation(!!simulate);
         if (flows != null) ui.setFlows(!!flows);
+        if (multiplier != null) {
+          if (!(Number(multiplier) >= 0)) throw new ToolError('multiplier must be a number ≥ 0');
+          ui.setMultiplier(Number(multiplier));
+        }
+        if (overview) await ui.overview();
         if (focus) ui.focus(resolveNode(store.scene, focus).id);
         if (fit) ui.fit();
         return { ok: true };
@@ -503,15 +548,15 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       title: 'User journeys',
       description:
         'Manage user journeys: named, ordered paths a request takes through the diagram (e.g. "Login", "Checkout"), shown as a numbered, animated path in 2D and 3D. ' +
-        'Actions: list (read), create, update (rename/recolor/replace steps), delete, show (put one on screen, optionally focused on a step; omit id to hide). ' +
+        'Actions: list (read), create, update (rename/recolor/replace steps), delete, show (put one on screen, optionally focused on a step; omit id to hide), play (animate it step by step). ' +
         'Define a path with `start` (node id or label) and `steps`, each a hop `{to, note}` to the next node. A hop follows the direct connection, or the shortest chain of connections if there is none; ' +
         'hops back toward the caller (responses) walk connections backwards automatically. Connections must already exist (modeling8d_connect).',
       inputSchema: {
         type: 'object',
         required: ['action'],
         properties: {
-          action: { type: 'string', enum: ['list', 'create', 'update', 'delete', 'show'] },
-          id: { type: 'string', description: 'Journey id or name (update/delete/show)' },
+          action: { type: 'string', enum: ['list', 'create', 'update', 'delete', 'show', 'play'] },
+          id: { type: 'string', description: 'Journey id or name (update/delete/show/play)' },
           name: { type: 'string' },
           color: { type: 'string', description: '#rrggbb (default: next unused journey color)' },
           start: { type: 'string', description: 'Node where the journey starts (create, or update with steps)' },
@@ -563,6 +608,12 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
             store.setJourney(j.id, step ? step - 1 : -1);
             return { shown: j.name, step: store.journey!.step + 1 || 'all' };
           }
+          case 'play': {
+            const j = resolveJourney(s, id);
+            if (!j.steps.length) throw new ToolError(`Journey "${j.name}" has no steps`);
+            ui.playJourney(j.id);
+            return { playing: j.name, steps: j.steps.length };
+          }
           default:
             throw new ToolError(`Unknown action "${action}"`);
         }
@@ -590,5 +641,179 @@ export function createTools(store: Store, ui: AgentUI): ToolDef[] {
       annotations: { readOnlyHint: true },
       execute: guard(({ includeView = true }: { includeView?: boolean } = {}) => ({ url: shareUrl(store.scene, includeView ? ui.captureView() : undefined) })),
     },
+    {
+      name: 'modeling8d_redo',
+      title: 'Redo',
+      description: 'Redo what undo just took back. Pass steps to redo several.',
+      inputSchema: { type: 'object', properties: { steps: { type: 'number', minimum: 1, maximum: 50, default: 1 } } },
+      execute: guard(({ steps = 1 }: { steps?: number }) => {
+        let n = 0;
+        for (; n < steps && store.canRedo; n++) store.redo();
+        return { redone: n };
+      }),
+    },
+    {
+      name: 'modeling8d_tour',
+      title: 'Camera tour',
+      description:
+        'Manage the 3D camera tour: saved views ("stops") the user can step through or present full screen. ' +
+        'Actions: list (read), add (save the current 3D view as a stop; it remembers the journey on screen), update (re-save stop `target` with the current view), ' +
+        'rename (target, name), delete (target), reorder (names, every stop once), go (fly to stop `target`), present (start the presentation from stop 1), stop (end it). ' +
+        'A `target` is a stop name, its id, or its 1-based number. Use modeling8d_view (focus, overview) and modeling8d_journeys (show) to set up a view before adding it.',
+      inputSchema: {
+        type: 'object',
+        required: ['action'],
+        properties: {
+          action: { type: 'string', enum: ['list', 'add', 'update', 'rename', 'delete', 'reorder', 'go', 'present', 'stop'] },
+          target: { type: ['string', 'number'], description: 'Stop name, id or 1-based number' },
+          name: { type: 'string' },
+          names: { type: 'array', items: { type: 'string' }, description: 'reorder: every stop name, in the new order' },
+        },
+      },
+      execute: guard(async ({ action, target, name, names }: any) => {
+        const list = () => ({
+          stops: store.scene.stops.map((st, i) => ({ n: i + 1, id: st.id, name: st.name, journey: store.journeyById(st.journey)?.name ?? null })),
+        });
+        const find = (t: unknown): Stop => {
+          const stops = store.scene.stops;
+          const k = typeof t === 'number' || /^\d+$/.test(String(t)) ? Number(t) - 1 : -1;
+          const st = stops[k] ?? stops.find((x) => x.id === t || x.name.toLowerCase() === String(t).toLowerCase());
+          if (!st) throw new ToolError(`No tour stop "${t}"`);
+          return st;
+        };
+        switch (action) {
+          case 'list':
+            return list();
+          case 'add': {
+            const st = await ui.captureStop(name || `View ${store.scene.stops.length + 1}`);
+            store.update((s) => { s.stops.push(st); });
+            return list();
+          }
+          case 'update': {
+            const st = find(target);
+            const c = await ui.captureStop(st.name);
+            store.update((s) => { const x = s.stops.find((y) => y.id === st.id)!; x.pos = c.pos; x.target = c.target; x.journey = c.journey; });
+            return list();
+          }
+          case 'rename': {
+            const st = find(target);
+            if (!name) throw new ToolError('rename needs `name`');
+            store.update((s) => { s.stops.find((y) => y.id === st.id)!.name = String(name); });
+            return list();
+          }
+          case 'delete': {
+            const st = find(target);
+            store.update((s) => { s.stops = s.stops.filter((y) => y.id !== st.id); });
+            return list();
+          }
+          case 'reorder': {
+            const order = (names ?? []).map(find);
+            if (order.length !== store.scene.stops.length || new Set(order).size !== order.length)
+              throw new ToolError('reorder needs every stop exactly once');
+            store.update((s) => { s.stops = order.map((st: Stop) => s.stops.find((y) => y.id === st.id)!); });
+            return list();
+          }
+          case 'go': {
+            const st = find(target);
+            await ui.goStop(store.scene.stops.indexOf(st));
+            return { at: st.name };
+          }
+          case 'present':
+            if (!store.scene.stops.length) throw new ToolError('Add a tour stop first');
+            await ui.present(true);
+            return { presenting: true, stops: store.scene.stops.length };
+          case 'stop':
+            await ui.present(false);
+            return { presenting: false };
+          default:
+            throw new ToolError(`Unknown action "${action}"`);
+        }
+      }),
+    },
+    {
+      name: 'modeling8d_scene',
+      title: 'Whole scene',
+      description:
+        'Work with the whole diagram. Actions: new (start an empty diagram), demo (load the demo system), load (replace the diagram with `scene`, a JSON object as returned by export), ' +
+        'export (format "json" returns the scene; "html" and "png" download a file for the user: a standalone 3D viewer or an image of the current view). ' +
+        'new, demo and load can be undone with modeling8d_undo.',
+      inputSchema: {
+        type: 'object',
+        required: ['action'],
+        properties: {
+          action: { type: 'string', enum: ['new', 'demo', 'load', 'export'] },
+          scene: { type: 'object', description: 'load: a full scene (as returned by export with format "json")' },
+          format: { type: 'string', enum: ['json', 'html', 'png'], default: 'json' },
+        },
+      },
+      execute: guard(async ({ action, scene, format = 'json' }: any) => {
+        const replace = (next: Scene) => {
+          store.checkpoint();
+          store.load(next, false);
+          store.select([]);
+          ui.fit();
+          return { nodes: Object.keys(next.nodes).length, edges: Object.keys(next.edges).length, floors: next.layers.length };
+        };
+        switch (action) {
+          case 'new':
+            return replace(emptyScene());
+          case 'demo':
+            return replace(demoScene());
+          case 'load': {
+            let next: Scene;
+            try { next = validateScene(scene); } catch (e) { throw new ToolError(`Invalid scene: ${(e as Error).message}`); }
+            return replace(next);
+          }
+          case 'export':
+            if (format === 'json') return { scene: store.scene };
+            if (format !== 'html' && format !== 'png') throw new ToolError(`Unknown format "${format}"`);
+            return { downloaded: await ui.exportFile(format) };
+          default:
+            throw new ToolError(`Unknown action "${action}"`);
+        }
+      }),
+    },
   ];
+  // Batch: several calls as one all-or-nothing change that undoes with a single Ctrl+Z.
+  const byName = new Map(tools.map((t) => [t.name, t]));
+  tools.push({
+    name: 'modeling8d_batch',
+    title: 'Batch',
+    description:
+      'Run several tool calls in order as one change: if any call fails, everything is rolled back, and on success the whole batch undoes with a single Ctrl+Z. ' +
+      'Each call is { tool, input }; tool names may omit the "modeling8d_" prefix. Returns every call\'s result.',
+    inputSchema: {
+      type: 'object',
+      required: ['calls'],
+      properties: {
+        calls: {
+          type: 'array',
+          minItems: 1,
+          items: { type: 'object', required: ['tool'], properties: { tool: { type: 'string' }, input: { type: 'object' } } },
+        },
+      },
+    },
+    execute: guard(async ({ calls }: any) => {
+      if (!Array.isArray(calls) || !calls.length) throw new ToolError('calls must be a non-empty array');
+      const resolved = calls.map((c: any, i: number) => {
+        const t = byName.get(c?.tool) ?? byName.get('modeling8d_' + c?.tool);
+        if (!t || t.name === 'modeling8d_batch') throw new ToolError(`Call ${i + 1}: unknown tool "${c?.tool}"`);
+        return { t, input: c.input ?? {} };
+      });
+      const mark = store.historyMark();
+      const before = JSON.stringify(store.scene);
+      const results: unknown[] = [];
+      for (const [i, { t, input }] of resolved.entries()) {
+        try {
+          results.push(JSON.parse(await t.execute(input)));
+        } catch (e) {
+          store.rollback(mark, before);
+          throw new ToolError(`Call ${i + 1} (${t.name}) failed, nothing was changed: ${(e as Error).message}`);
+        }
+      }
+      store.squash(mark, before);
+      return { results };
+    }),
+  });
+  return tools;
 }

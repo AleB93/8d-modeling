@@ -392,3 +392,40 @@ describe('journeys', () => {
     expect(st.recording?.id).toBe('j1');
   });
 });
+
+describe('history grouping (squash / rollback)', () => {
+  const nodeCount = (st: Store) => Object.keys(st.scene.nodes).length;
+  const addNode = (st: Store) => st.update((s) => { const n = makeNode('service', 0, 0, s.layers[0].id); s.nodes[n.id] = n; });
+
+  it('squash merges several changes into one undo step', () => {
+    const st = new Store();
+    addNode(st);
+    const mark = st.historyMark();
+    const before = JSON.stringify(st.scene);
+    addNode(st);
+    addNode(st);
+    st.squash(mark, before);
+    expect(nodeCount(st)).toBe(3);
+    st.undo();
+    expect(nodeCount(st)).toBe(1);
+  });
+
+  it('squash does nothing when nothing changed', () => {
+    const st = new Store();
+    addNode(st);
+    const mark = st.historyMark();
+    st.squash(mark, JSON.stringify(st.scene));
+    expect(st.historyMark()).toBe(mark);
+  });
+
+  it('rollback restores the scene and drops the history in between', () => {
+    const st = new Store();
+    addNode(st);
+    const mark = st.historyMark();
+    const before = JSON.stringify(st.scene);
+    addNode(st);
+    st.rollback(mark, before);
+    expect(nodeCount(st)).toBe(1);
+    expect(st.historyMark()).toBe(mark);
+  });
+});
