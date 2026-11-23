@@ -1,6 +1,6 @@
 # 8D modeling — system architecture in 2D and 3D
 
-Draw your architecture in 2D (Excalidraw-style), press **Tab**, and it rises into 3D, where you can run traffic through it.
+Draw your architecture in 2D, press **Tab**, and it rises into 3D, where you can run traffic through it.
 Runs entirely in the browser: no server, no account.
 
 ```bash

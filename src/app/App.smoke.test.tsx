@@ -43,6 +43,8 @@ describe('App shell', () => {
     expect(about.textContent).toContain('AleB93');
     expect(about.querySelector('a[href="https://github.com/AleB93"]')).toBeTruthy();
     expect(about.textContent).not.toMatch(/@/);
+    expect(about.textContent).toContain('Claude in Chrome friendly');
+    expect(about.querySelector('a[href$="llms.txt"]')).toBeTruthy();
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await tick();
     expect($('.about[aria-label="About 8D modeling"]')).toBeNull();

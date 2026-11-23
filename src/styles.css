@@ -233,3 +233,4 @@ button.brand:hover { filter: brightness(1.15); }
 .sr-outline h3 { font-size: 13px; margin: 10px 0 4px; }
 .sr-outline ul, .sr-outline ol { margin: 0; padding-left: 18px; }
 .sr-outline button { color: var(--accent); text-decoration: underline; }
+.about code { font-size: 12px; padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,0.07); }

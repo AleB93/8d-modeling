@@ -2,6 +2,8 @@ import { Icon } from '../../shared/ui/icons';
 
 const REPO_URL = 'https://github.com/AleB93/8d-modeling';
 const AUTHOR_URL = 'https://github.com/AleB93';
+/** Served next to the app, so it works locally and on any hosting subpath. */
+const GUIDE_URL = () => new URL('llms.txt', document.baseURI).href;
 
 export function About(props: { close: () => void }) {
   return (
@@ -14,7 +16,13 @@ export function About(props: { close: () => void }) {
           <li><b>Play 3D</b>: flows, a traffic simulation with capacity, failover and cascading errors, and guided camera tours.</li>
           <li><b>Journeys</b>: record user paths such as login or checkout and replay them step by step.</li>
           <li><b>Share</b>: the whole diagram fits in a link or a standalone HTML file. No server, no account: everything stays in your browser.</li>
-          <li><b>AI agents</b>: tools exposed through WebMCP let an in-browser agent build and analyze diagrams.</li>
+        </ul>
+        <h4>Works with AI agents</h4>
+        <ul>
+          <li><b>Claude in Chrome friendly</b>: any agent that can run JavaScript in the page can build, edit, simulate and share diagrams through <code>window.modeling8d</code>, in every browser. Changes show live and undo with Ctrl+Z.</li>
+          <li><b>Readable canvas</b>: the diagram also exists as a text outline that agents and screen readers can read. Press the <kbd>O</kbd> key (letter O) to show it as a clickable list.</li>
+          <li><b>WebMCP</b>: in Chrome with the WebMCP flag on, the same tools are registered with the browser for built-in agents.</li>
+          <li><b>Agent guide</b>: <a href={GUIDE_URL()} target="_blank" rel="noopener noreferrer">llms.txt</a> explains every tool, with examples.</li>
         </ul>
         <h4>Contact</h4>
         <p>Made by <b>AleB93</b>. Questions, ideas or bugs? Reach me on GitHub.</p>
