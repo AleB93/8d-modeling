@@ -2,16 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { demoScene } from './demo';
 import { journeyEnd, stepEnds, stepText } from '../journeys/journeys';
 import { validateScene } from '../persistence/persist';
+import { crossPageEdges, pageLayers, pagesOf } from '../../shared/model/pages';
 
 describe('demoScene', () => {
   const s = demoScene();
   const byLabel = (l: string) => Object.values(s.nodes).find((n) => n.label === l)!;
 
-  it('is a valid scene with three floors bottom-up', () => {
-    expect(() => validateScene(structuredClone(s))).not.toThrow();
-    expect(s.layers.map((l) => l.name)).toEqual(['Data', 'Services', 'Edge']);
-    expect(Object.keys(s.nodes)).toHaveLength(10);
-    expect(Object.keys(s.edges)).toHaveLength(12);
+  it('is a valid scene: three pages, the shop with three floors bottom-up', () => {
+    expect(validateScene(structuredClone(s))).toEqual(s);
+    expect(pagesOf(s).map((p) => p.name)).toEqual(['Shop', 'Analytics', 'Payments']);
+    expect(pageLayers(s, s.pages![0].id).map((l) => l.name)).toEqual(['Data', 'Services', 'Edge']);
+    expect(pageLayers(s, s.pages![1].id).map((l) => l.name)).toEqual(['Storage', 'Ingest']);
+    expect(pageLayers(s, s.pages![2].id).map((l) => l.name)).toEqual(['Ground']);
+    expect(Object.keys(s.nodes)).toHaveLength(21);
+    expect(Object.keys(s.edges)).toHaveLength(21);
+    expect(crossPageEdges(s)).toEqual([]);
     expect(s.stops.map((st) => st.name)).toEqual(['Overview', 'Data tier', 'Entry point']);
   });
 
@@ -29,7 +34,8 @@ describe('demoScene', () => {
   });
 
   it('has journeys over existing connections, with responses walked backwards', () => {
-    expect(s.journeys.map((j) => j.name)).toEqual(['Place order', 'Browse (mobile)']);
+    expect(s.journeys.map((j) => j.name)).toEqual(['Place order', 'Browse (mobile)', 'Pay']);
+    expect(journeyEnd(s, s.journeys[2])).toBe(byLabel('Checkout').id);
     const browse = s.journeys[1];
     for (const st of s.journeys.flatMap((j) => j.steps)) expect(stepEnds(s, st)).not.toBeNull();
     expect(stepEnds(s, browse.steps[1])!.from).toBe(stepEnds(s, browse.steps[0])!.to);

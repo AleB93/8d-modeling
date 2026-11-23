@@ -134,7 +134,14 @@ describe('sceneToHtml: embed safety under hostile labels', () => {
 
 describe('sceneToHtml: placement', () => {
   it('single page: x unchanged, names unchanged, lv = index', () => {
+    // the demo's first page alone
     const s = demoScene();
+    const first = s.pages![0].id;
+    s.layers = s.layers.filter((l) => l.page === first);
+    for (const n of Object.values(s.nodes)) if (!s.layers.some((l) => l.id === n.layer)) delete s.nodes[n.id];
+    for (const e of Object.values(s.edges)) if (!s.nodes[e.from] || !s.nodes[e.to]) delete s.edges[e.id];
+    s.journeys = s.journeys.filter((j) => j.steps.every((st) => s.edges[st.edge]));
+    delete s.pages;
     const { scene } = parse(sceneToHtml(s));
     for (const n of Object.values(s.nodes)) expect(scene.nodes[n.id].x).toBe(n.x);
     expect(scene.layers.map((l) => [l.name, l.lv])).toEqual(s.layers.map((l, i) => [l.name, i]));

@@ -114,7 +114,7 @@ describe('App shell', () => {
 
   it('mirrors the diagram in an accessible outline whose buttons select boxes', async () => {
     const nav = $('nav[aria-label="Diagram outline"]')!;
-    expect(nav.textContent).toMatch(/Diagram with \d+ boxes/);
+    expect(nav.textContent).toMatch(/Diagram with (\d+ pages, )?\d+ boxes/);
     const api = byText('nav[aria-label="Diagram outline"] button', 'API #1')!;
     api.click();
     await tick();

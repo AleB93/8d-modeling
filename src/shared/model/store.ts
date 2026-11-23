@@ -1,6 +1,6 @@
 import { emptyScene, Journey, Scene, SNode } from './types';
 import { findPath, journeyEnd, pruneJourneys, stepsToEdge } from '../../features/journeys/journeys';
-import { layerPages, pageLayers, pageOfLayer } from './pages';
+import { layerPages, pageLayers, pageOfLayer, pagesOf } from './pages';
 
 type Listener = () => void;
 
@@ -92,8 +92,10 @@ export class Store {
     if (this.recording?.from && !s.nodes[this.recording.from]) this.recording.from = null;
     for (const id of [...this.selection]) if (!Object.hasOwn(s.nodes, id) && !Object.hasOwn(s.edges, id)) this.selection.delete(id);
     if (s.layers.length && !s.layers.some((l) => l.id === this.activeLayer)) {
+      // the top floor of the same page, else of the first page
       const own = pageLayers(s, page);
-      this.activeLayer = (own.length ? own : s.layers)[(own.length ? own : s.layers).length - 1].id;
+      const pick = own.length ? own : pageLayers(s, pagesOf(s)[0].id);
+      this.activeLayer = pick[pick.length - 1].id;
     }
   }
 

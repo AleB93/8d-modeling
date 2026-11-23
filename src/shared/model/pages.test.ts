@@ -151,3 +151,14 @@ describe('store pages', () => {
     expect(st.activePage).toBe(page.id);
   });
 });
+
+describe('opening a scene', () => {
+  it('starts on the top floor of the first page', async () => {
+    const { demoScene } = await import('../../features/samples/demo');
+    const st = new Store();
+    const s = demoScene();
+    st.load(s);
+    expect(st.activePage).toBe(s.pages![0].id);
+    expect(st.activeLayer).toBe(pageLayers(s, s.pages![0].id).at(-1)!.id);
+  });
+});

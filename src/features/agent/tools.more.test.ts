@@ -171,7 +171,8 @@ describe('scene', () => {
     await call('undo');
     expect(nodeCount()).toBe(2);
     const d = await call('scene', { action: 'demo' });
-    expect(d.nodes).toBe(10);
+    expect(d.nodes).toBe(21);
+    expect(d.pages).toBe(3);
   });
 
   it('exports JSON and loads it back', async () => {
