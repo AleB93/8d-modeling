@@ -26,6 +26,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run coverage # unit + smoke tests; fails if logic coverage drops below 100%
       - run: npm run build
         env:
           # Optional WebMCP origin-trial token: set it under Settings → Secrets and variables → Actions → Variables

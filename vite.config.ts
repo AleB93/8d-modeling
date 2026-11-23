@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
 
@@ -9,4 +10,15 @@ export default defineConfig(({ command }) => ({
   // PORT is set per worktree by Hunkpad (basePort + worktree number)
   server: { host: '127.0.0.1', port: Number(process.env.PORT) || 5173, strictPort: true },
   build: { target: 'es2022', sourcemap: false, chunkSizeWarningLimit: 700 }, // three.js chunk is lazy-loaded
+  test: {
+    include: ['src/**/*.test.{ts,tsx}'],
+    coverage: {
+      provider: 'v8',
+      // Every logic module (.ts) must stay at 100%. Rendering and UI get smoke tests instead:
+      // Solid components (.tsx), the 2D canvas editor and the WebGL viewer.
+      include: ['src/shared/**/*.ts', 'src/features/**/*.ts'],
+      exclude: ['**/*.test.*', 'src/test/**', 'src/features/design/DesignCanvas.ts', 'src/features/play3d/Viewer3D.ts'],
+      thresholds: { lines: 100, branches: 100, functions: 100, statements: 100 },
+    },
+  },
 }));

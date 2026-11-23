@@ -1,0 +1,62 @@
+# 8D modeling
+
+> Draw system architecture in 2D, explore and simulate it in 3D. Runs entirely in the browser: no server, no account. This guide is for AI agents working in a tab where the app is open (for example Claude in Chrome).
+
+## How to drive the app
+
+Don't click around the canvas: the diagram is drawn on a <canvas>, so its boxes aren't in the page structure. Use the JavaScript API on `window.modeling8d`. It works in every browser and needs no flags. Run it with your "execute JavaScript in the page" tool.
+
+```js
+await modeling8d.help()                       // usage + every tool with its JSON input schema
+await modeling8d.call('get_scene')            // always read the diagram first
+await modeling8d.call('add_nodes', { nodes: [...] })
+```
+
+- `modeling8d.call(name, input)` runs a tool. The `modeling8d_` prefix is optional. `modeling8d.tools.<name>(input)` does the same.
+- Results are plain JSON. A failed call returns `{ error: "..." }` and changes nothing: every call applies fully or not at all.
+- Every change appears live in the open tab, and the user can undo it with Ctrl+Z.
+- To read the diagram without JavaScript, use the hidden "Diagram outline" in the page structure. It lists floors, boxes, connections and journeys, and its buttons select a box or show a journey.
+- In Chrome with `chrome://flags/#enable-webmcp-testing` enabled, the same tools are also registered through WebMCP (`document.modelContext`).
+
+## Concepts
+
+- **Floors (layers):** horizontal levels, stacked in 3D. Index 0 is the bottom floor.
+- **Nodes:** `service`, `database`, `queue`, `cache`, `lb` (load balancer), `client` (a traffic source), `zone` (a grouping box such as a VPC) and `text`.
+- **Connections:** directed, from caller to callee. `mult` is the number of calls to the target per request handled. `async: true` means fire-and-forget, for example publishing to a queue.
+- **Journeys:** named user paths through existing connections, such as "Login" or "Checkout". Each step can have a caption. Steps back toward the caller are responses.
+- **Simulation:** clients generate requests per second. Each node handles up to its `capacity` and drops the rest. Load balancers split load across healthy targets, and queues buffer it.
+
+## Tools
+
+- `get_scene` (read-only): floors, nodes and connections, as JSON. Call it before editing.
+- `add_nodes`: `{ nodes: [{ ref?, kind, label, layer?, x?, y?, capacity?, latency?, color? }] }`. A `layer` name that doesn't exist yet creates a new top floor. A `ref` can be used in `connect` later.
+- `connect`: `{ edges: [{ from, to, label?, mult?, async? }], refs? }`. `from` and `to` accept a node id, a ref or an exact label.
+- `update`: `{ updates: [{ target, ...fields }] }`. Node fields: label, layer, x, y, w, h, height, color, capacity, latency, kind and `down` (failed). Edge fields: label, mult, async, from, to.
+- `delete`: `{ targets: [idOrLabel, ...] }`. Deleting a node also removes its connections.
+- `layers`: `{ action: "add" | "rename" | "reorder" | "show" | "hide", names?, target?, name? }`.
+- `auto_layout`: `{ layers?: [name] }` arranges the diagram by dependency depth. Call it after adding nodes.
+- `simulate` (read-only): `{ multiplier?, seconds?, down?: [idOrLabel] }` returns throughput, errors, latency and bottlenecks.
+- `journeys`: `{ action: "list" | "create" | "update" | "delete" | "show", id?, name?, color?, start?, steps?: [{ to, note? }], step? }`. Each hop follows the existing connections.
+- `view`: `{ mode?: "design" | "play", simulate?, flows?, focus?, fit? }` controls what the user sees (2D editor or 3D).
+- `undo`: `{ steps? }`.
+- `share_link` (read-only): `{ includeView? }` returns a URL that opens this exact diagram. The whole scene is compressed into the link, and nothing is uploaded.
+
+## Example: build a small system
+
+```js
+await modeling8d.call('add_nodes', { nodes: [
+  { ref: 'web', kind: 'client', label: 'Web app', layer: 'Edge', capacity: 300 },
+  { ref: 'api', kind: 'service', label: 'API', layer: 'Services' },
+  { ref: 'db',  kind: 'database', label: 'Postgres', layer: 'Data' },
+]})
+await modeling8d.call('connect', { edges: [{ from: 'Web app', to: 'API' }, { from: 'API', to: 'Postgres', mult: 0.3 }] })
+await modeling8d.call('auto_layout')
+await modeling8d.call('journeys', { action: 'create', name: 'Load page', start: 'Web app',
+  steps: [{ to: 'API', note: 'GET /' }, { to: 'Postgres', note: 'query' }, { to: 'API' }, { to: 'Web app', note: '200 OK' }] })
+await modeling8d.call('simulate', { multiplier: 2 })
+await modeling8d.call('view', { mode: 'play' })
+```
+
+## About
+
+Made by AleB93 · MIT License · Source code: https://github.com/AleB93/8d-modeling

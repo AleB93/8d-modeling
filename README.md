@@ -7,6 +7,7 @@ Runs entirely in the browser: no server, no account.
 npm install
 npm run dev      # http://localhost:5173
 npm run build    # type-check + production build into dist/
+npm test         # unit + smoke tests
 ```
 
 ## Modes
@@ -24,6 +25,20 @@ Layers are floors: the top of the list is the top floor in 3D.
 **Journeys** (both modes): named user paths such as *Login* or *Checkout*. Press **+** in the Journeys panel and click boxes in order. Each hop follows the existing connections, and hops back toward the caller are recorded as responses. Give steps captions, then **Play** to walk through them: the rest of the diagram fades, a token travels hop by hop, and the caption bar shows the current step. Step with **[ / ]**; **Esc** finishes recording or hides the journey. A tour stop can carry a journey, and journeys travel in share links and HTML exports.
 
 Press **?** in the app for all shortcuts.
+
+## AI agents (Claude in Chrome and others)
+
+Any agent that can run JavaScript in the page can drive the app through **`window.modeling8d`**, in every browser and with no flags:
+
+```js
+await modeling8d.help()                    // usage + every tool with its input schema
+await modeling8d.call('get_scene')         // results are JSON; failures return { error } and change nothing
+await modeling8d.call('add_nodes', { nodes: [{ kind: 'service', label: 'API' }] })
+```
+
+- **Agent guide:** [`llms.txt`](public/llms.txt) is served next to the app and linked from the page's `<head>`.
+- **Diagram outline:** agents that only read the page get a text version of the canvas: floors, boxes, connections and journeys. It's hidden from sight but present in the accessibility tree.
+- **Diagram list:** press **O**, or use **Menu → Diagram list**, to show the outline as a panel whose buttons select boxes and show journeys. This is also what screen-reader and keyboard users get.
 
 ## AI agent tools (WebMCP)
 
@@ -56,15 +71,40 @@ In dev you can call the tools from the console: `await __modeling8d.tools.modeli
 
 ## Architecture
 
+Code is grouped by feature. Each feature folder holds its logic, its UI and its tests side by side; anything used by several features lives in `shared/`.
+
 ```
-src/model/     types (Scene/Node/Edge/Layer/Stop), store (mutable scene + snapshot undo), persist (IndexedDB, share links), demo
-src/design/    DesignCanvas — 2D renderer + interaction; redraws only when dirty, culls off-screen nodes
-src/play/      Viewer3D — lazy-loaded; one InstancedMesh per node kind, merged edge lines, a single Points cloud for particles,
-               render-on-demand, shadows rebuilt only when the scene changes
-src/sim/       Simulation — steady-state load propagation + error/latency DFS
-src/agent/     tools.ts (transport-agnostic tool definitions), webmcp.ts (browser registration adapter)
-src/App.tsx    SolidJS shell: toolbar, inspector, layers, simulation and tour panels
+src/main.tsx               entry point
+src/app/App.tsx            shell: top bar, modes, keyboard shortcuts, wiring between features
+src/shared/model/          types (Scene/Node/Edge/Layer/Stop/Journey), geom, store (mutable scene + snapshot undo)
+src/shared/appStore.ts     the app's single Store instance
+src/shared/ui/             icons, number formatting, DOM helpers
+src/features/
+  design/                  DesignCanvas (2D renderer + interaction), toolbar, inline label editor
+  play3d/                  Viewer3D (lazy-loaded three.js view), hover tooltip
+  inspector/               properties panel for the selection
+  layers/                  floors panel, incl. "All layers"
+  simulation/              traffic simulation engine + panel
+  journeys/                path finding and playback timing, journeys panel, caption bar
+  tour/                    camera stops panel
+  share/                   share links (compressed scene + view in the URL hash)
+  persistence/             IndexedDB autosave, scene validation, file download
+  export/                  standalone HTML viewer export
+  agent/                   agent tools, WebMCP registration, window.modeling8d page API, status pill, setup popup
+  outline/                 text outline of the diagram (accessibility tree + Diagram list panel)
+  samples/                 demo scene, stress-test scene
+  about/ · help/           About dialog, keyboard shortcuts
+src/test/                  fakes for browser APIs jsdom lacks (2D canvas, ResizeObserver)
 ```
+
+## Tests
+
+```bash
+npm test            # all unit + smoke tests (Vitest)
+npm run coverage    # same, with coverage; fails below 100%
+```
+
+Every logic module (`.ts` under `shared/` and `features/`) is held at **100%** statement, branch, function and line coverage. Rendering and UI (Solid components, the 2D canvas editor and the WebGL viewer) are covered by smoke tests that mount the real code in jsdom: the whole app, the 2D editor driven by pointer events, and the 3D viewer with only the WebGL renderer faked.
 
 - 2D (x, y) maps to 3D (x, z); `layer` sets the elevation and `height` the extrusion. Both views read one store, so nothing is ever converted between them.
 - Autosaves to IndexedDB. **Menu → Copy share link** compresses the scene (deflate-raw + base64url) into the URL hash.
