@@ -1094,8 +1094,8 @@ export class Viewer3D {
     this.start();
     if (this.dirty) this.rebuild();
     const d = this.topDownDistance(v.width);
-    const dx = this.placements.get(this.store.activePage)?.dx ?? 0;
-    const t = new THREE.Vector3((v.cx + dx) * S, 0, v.cy * S);
+    // 2D draws every page at its 3D shift, so 2D and ground coordinates are the same
+    const t = new THREE.Vector3(v.cx * S, 0, v.cy * S);
     this.camera.position.set(t.x, d, t.z + d * 0.001);
     this.controls.target.copy(t);
     this.camera.lookAt(t);
@@ -1119,8 +1119,7 @@ export class Viewer3D {
     // come back to 2D on the page under the camera
     const page = this.pageAt(t.x / S);
     if (page) this.store.openPage(page);
-    const dx = this.placements.get(this.store.activePage)?.dx ?? 0;
-    return { cx: t.x / S - dx, cy: t.z / S, width };
+    return { cx: t.x / S, cy: t.z / S, width };
   }
 
   /** Page whose area on the ground is nearest to 3D x (world px). */

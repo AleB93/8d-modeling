@@ -2,6 +2,7 @@ import type { Store } from '../../shared/model/store';
 import { isNodeId, Journey, KINDS, makeEdge, makeNode, NodeKind, SEdge, SNode, uid } from '../../shared/model/types';
 import { journeyEdges, journeyNodes, tokenAt } from '../journeys/journeys';
 import { bounds, cxOf, cyOf, distToSeg, edgeEnds } from '../../shared/model/geom';
+import { layerPages, PagePlacement, pagePlacements, pageLayers, pagesOf } from '../../shared/model/pages';
 
 export type Tool = 'select' | 'hand' | 'arrow' | NodeKind;
 
@@ -17,7 +18,7 @@ export interface View2D { cx: number; cy: number; width: number }
 type Drag =
   | { t: 'pan'; sx: number; sy: number; vx: number; vy: number }
   | { t: 'move'; wx: number; wy: number; sx: number; sy: number; orig: Map<string, [number, number]>; started: boolean }
-  | { t: 'resize'; id: string; hx: -1 | 1; hy: -1 | 1; orig: SNode; started: boolean }
+  | { t: 'resize'; id: string; hx: -1 | 1; hy: -1 | 1; orig: SNode; pdx: number; started: boolean }
   | { t: 'marquee'; x0: number; y0: number; x1: number; y1: number; base: Set<string> }
   | { t: 'create'; kind: NodeKind; x0: number; y0: number; x1: number; y1: number }
   | { t: 'arrow'; from: string; x: number; y: number; over: string | null };
@@ -55,11 +56,18 @@ export class DesignCanvas {
   private raf = 0;
   private clip: { nodes: SNode[]; edges: SEdge[] } | null = null;
   private measure = document.createElement('canvas').getContext('2d')!;
+  // Every page is drawn, side by side, at the same horizontal shift it gets in 3D (pagePlacements).
+  // Nodes keep page-local coordinates in the scene; the canvas works on shifted copies ("display nodes").
+  // The layout is frozen while a box is moved or resized, so a page never slides under the pointer.
+  private placements = new Map<string, PagePlacement>();
+  private layerDx = new Map<string, number>();
+  private disp: Record<string, SNode> = {};
+  private dispDirty = true;
 
   constructor(public canvas: HTMLCanvasElement, private store: Store, private hooks: DesignHooks) {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
     new ResizeObserver(() => this.resize()).observe(canvas);
-    store.subscribe(() => this.invalidate());
+    store.subscribe(() => { this.dispDirty = true; this.invalidate(); });
     canvas.addEventListener('pointerdown', this.onDown);
     canvas.addEventListener('pointermove', this.onMove);
     canvas.addEventListener('pointerup', this.onUp);
@@ -111,12 +119,84 @@ export class DesignCanvas {
     this.invalidate();
   }
 
-  fit() {
-    const b = bounds(Object.values(this.store.scene.nodes).filter((n) => this.store.onCanvas(n.layer)));
+  /** Frame every page (or one page). */
+  fit(pageId?: string) {
+    const b = pageId ? this.pageRect(pageId) : bounds(this.visibleNodes());
     if (!b || !this.w) return;
     const z = Math.max(0.1, Math.min(2, Math.min(this.w / (b.x1 - b.x0), this.h / (b.y1 - b.y0)) * 0.8));
     this.view = { z, x: (b.x0 + b.x1) / 2 - this.w / 2 / z, y: (b.y0 + b.y1) / 2 - this.h / 2 / z };
     this.invalidate();
+  }
+
+  /** Frame a page unless most of it is already on screen. */
+  revealPage(pageId: string) {
+    const r = this.pageRect(pageId);
+    if (!r || !this.w) return;
+    const v = this.getView(), vw = v.width, vh = (this.h / this.w) * vw;
+    const ix = Math.max(0, Math.min(r.x1, v.cx + vw / 2) - Math.max(r.x0, v.cx - vw / 2));
+    const iy = Math.max(0, Math.min(r.y1, v.cy + vh / 2) - Math.max(r.y0, v.cy - vh / 2));
+    if ((ix * iy) / ((r.x1 - r.x0) * (r.y1 - r.y0)) < 0.5) this.fit(pageId);
+  }
+
+  // ---------- page layout ----------
+  private layout() {
+    if (!this.dispDirty) return;
+    this.dispDirty = false;
+    const s = this.store.scene;
+    const frozen = this.drag?.t === 'move' || this.drag?.t === 'resize';
+    if (!frozen || !this.placements.size) {
+      this.placements = pagePlacements(s);
+      const lp = layerPages(s);
+      this.layerDx = new Map(s.layers.map((l) => [l.id, this.placements.get(lp.get(l.id)!)?.dx ?? 0]));
+    }
+    const out: Record<string, SNode> = {};
+    for (const n of Object.values(s.nodes)) {
+      const dx = this.layerDx.get(n.layer) ?? 0;
+      out[n.id] = dx ? { ...n, x: n.x + dx } : n;
+    }
+    this.disp = out;
+  }
+
+  /** Horizontal shift of a layer's page on the canvas. */
+  layerShift(layerId: string) {
+    this.layout();
+    return this.layerDx.get(layerId) ?? 0;
+  }
+
+  /** A node as drawn on the canvas (x shifted by its page). */
+  displayNode(id: string): SNode | undefined {
+    this.layout();
+    return this.disp[id];
+  }
+
+  /** A page's area on the canvas: its boxes, padded. */
+  pageRect(pageId: string) {
+    this.layout();
+    const p = this.placements.get(pageId);
+    if (!p) return null;
+    const pad = 60;
+    return { x0: p.x0 + p.dx - pad, x1: p.x1 + p.dx + pad, y0: p.y0 - pad - 30, y1: p.y1 + pad };
+  }
+
+  /** Page under (or nearest to) a canvas x. */
+  pageAt(wx: number): string {
+    this.layout();
+    let best = pagesOf(this.store.scene)[0].id, bd = Infinity;
+    for (const [id, p] of this.placements) {
+      const d = wx < p.x0 + p.dx ? p.x0 + p.dx - wx : wx > p.x1 + p.dx ? wx - p.x1 - p.dx : 0;
+      if (d < bd) { bd = d; best = id; }
+    }
+    return best;
+  }
+
+  /** Floor new boxes go to on a page: the active floor if it is there, else the page's top visible floor. */
+  private layerFor(pageId: string) {
+    const s = this.store;
+    const ls = pageLayers(s.scene, pageId);
+    if (ls.some((l) => l.id === s.activeLayer)) return s.activeLayer;
+    const vis = ls.filter((l) => l.visible);
+    const pick = vis.length ? vis : ls;
+    return pick[pick.length - 1]?.id ?? s.activeLayer;
   }
 
   setTool(t: Tool) {
@@ -125,7 +205,8 @@ export class DesignCanvas {
     this.hooks.onTool(t);
   }
 
-  screenRect(n: SNode) {
+  screenRect(node: SNode) {
+    const n = this.displayNode(node.id) ?? node;
     const z = this.view.z;
     return { x: (n.x - this.view.x) * z, y: (n.y - this.view.y) * z, w: n.w * z, h: n.h * z, z };
   }
@@ -139,8 +220,10 @@ export class DesignCanvas {
   }
 
   // ---------- hit testing ----------
+  /** Display nodes on visible floors. */
   private visibleNodes(): SNode[] {
-    return Object.values(this.store.scene.nodes).filter((n) => this.store.onCanvas(n.layer));
+    this.layout();
+    return Object.values(this.disp).filter((n) => this.store.onCanvas(n.layer));
   }
 
   /** Topmost node at a world point. Active layer wins; zones only hit on their border/title. */
@@ -167,9 +250,10 @@ export class DesignCanvas {
 
   private hitEdge(wx: number, wy: number): SEdge | null {
     const tol = 6 / this.view.z;
-    const s = this.store.scene;
+    this.layout();
+    const s = this.store.scene, D = this.disp;
     for (const e of Object.values(s.edges)) {
-      const a = s.nodes[e.from], b = s.nodes[e.to];
+      const a = D[e.from], b = D[e.to];
       if (!a || !b || !this.store.onCanvas(a.layer) || !this.store.onCanvas(b.layer)) continue;
       const [x1, y1, x2, y2] = edgeEnds(a, b);
       if (distToSeg(wx, wy, x1, y1, x2, y2) < tol) return e;
@@ -224,8 +308,9 @@ export class DesignCanvas {
 
     const handle = this.hitHandle(e.offsetX, e.offsetY);
     if (handle) {
-      const n = this.store.selectedNodes[0];
-      this.drag = { t: 'resize', id: n.id, ...handle, orig: { ...n }, started: false };
+      const real = this.store.selectedNodes[0];
+      const n = this.displayNode(real.id) ?? real;
+      this.drag = { t: 'resize', id: n.id, ...handle, orig: { ...n }, pdx: n.x - real.x, started: false };
       return;
     }
 
@@ -293,7 +378,7 @@ export class DesignCanvas {
           const n = s.nodes[d.id];
           if (!n) return;
           n.w = w; n.h = h;
-          n.x = d.hx < 0 ? ax - w : ax;
+          n.x = (d.hx < 0 ? ax - w : ax) - d.pdx;
           n.y = d.hy < 0 ? ay - h : ay;
         }, false);
         return;
@@ -305,7 +390,10 @@ export class DesignCanvas {
       case 'arrow': {
         d.x = wx; d.y = wy;
         const n = this.hitNode(wx, wy, true);
-        d.over = n && n.id !== d.from && n.kind !== 'text' ? n.id : null;
+        const from = this.store.scene.nodes[d.from];
+        const lp = layerPages(this.store.scene);
+        // pages are independent: no connections across them
+        d.over = n && from && n.id !== d.from && n.kind !== 'text' && lp.get(n.layer) === lp.get(from.layer) ? n.id : null;
         break;
       }
     }
@@ -315,6 +403,7 @@ export class DesignCanvas {
   private onUp = (e: PointerEvent) => {
     const d = this.drag;
     this.drag = null;
+    this.dispDirty = true; // unfreeze the page layout
     this.guides = { x: [], y: [] };
     if (!d) return;
     const s = this.store;
@@ -345,7 +434,8 @@ export class DesignCanvas {
         } else {
           x = snap(d.x0 - w / 2); y = snap(d.y0 - h / 2);
         }
-        const n = makeNode(d.kind, x, y, s.activeLayer, { w, h });
+        const layer = this.layerFor(this.pageAt(sz ? (d.x0 + d.x1) / 2 : d.x0));
+        const n = makeNode(d.kind, x - this.layerShift(layer), y, layer, { w, h });
         s.update((sc) => {
           if (n.kind === 'zone') {
             // zones go to the back so they never cover nodes
@@ -377,8 +467,9 @@ export class DesignCanvas {
     if (free) return [dx, dy];
     const sc = this.store.scene;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const [id, [ox, oy]] of orig) {
+    for (const [id, [rx, oy]] of orig) {
       const n = sc.nodes[id];
+      const ox = rx + this.layerShift(n.layer); // canvas coordinates
       x0 = Math.min(x0, ox + dx); y0 = Math.min(y0, oy + dy);
       x1 = Math.max(x1, ox + dx + n.w); y1 = Math.max(y1, oy + dy + n.h);
     }
@@ -398,7 +489,8 @@ export class DesignCanvas {
         if (dd < bdy) { bdy = dd; by = t - v; }
       }
     }
-    const [fx0, fy0] = orig.values().next().value!;
+    const [firstId, [rx0, fy0]] = orig.entries().next().value!;
+    const fx0 = rx0 + this.layerShift(sc.nodes[firstId].layer);
     const ndx = bx !== null ? dx + bx : Math.round((fx0 + dx) / GRID) * GRID - fx0;
     const ndy = by !== null ? dy + by : Math.round((fy0 + dy) / GRID) * GRID - fy0;
     if (bx !== null) this.guides.x = xs.map((v) => v + bx!).filter((v, i, a) => a.indexOf(v) === i);
@@ -433,7 +525,8 @@ export class DesignCanvas {
       this.hooks.onEditLabel(n.id);
       return;
     }
-    const t = makeNode('text', Math.round(wx), Math.round(wy - 12), this.store.activeLayer);
+    const layer = this.layerFor(this.pageAt(wx));
+    const t = makeNode('text', Math.round(wx - this.layerShift(layer)), Math.round(wy - 12), layer);
     this.store.update((s) => { s.nodes[t.id] = t; });
     this.store.select([t.id]);
     this.hooks.onEditLabel(t.id);
@@ -531,9 +624,11 @@ export class DesignCanvas {
     ctx.setTransform(dpr * z, 0, 0, dpr * z, -view.x * z * dpr, -view.y * z * dpr);
     const vx0 = view.x, vy0 = view.y, vx1 = vx0 + this.w / z, vy1 = vy0 + this.h / z;
     const inView = (n: SNode) => !(n.x > vx1 || n.y > vy1 || n.x + n.w < vx0 || n.y + n.h < vy0);
-    const s = this.store.scene;
+    this.layout();
+    const s = this.store.scene, D = this.disp;
     const vis = new Set(s.layers.filter((l) => this.store.onCanvas(l.id)).map((l) => l.id));
     const sel = this.store.selection;
+    this.drawPages();
 
     // a shown journey takes over dimming: everything off its path fades, whatever the layer
     const J = this.store.activeJourney;
@@ -543,10 +638,10 @@ export class DesignCanvas {
     const jEdges = J && !rec ? journeyEdges(J) : null;
     const dimNode = (n: SNode) => !rec && (jNodes ? !jNodes.has(n.id) : !this.store.inFocus(n.layer));
 
-    const nodes = Object.values(s.nodes);
+    const nodes = Object.values(D);
     for (const n of nodes) if (n.kind === 'zone' && vis.has(n.layer) && inView(n)) this.drawNode(n, dimNode(n));
     for (const e of Object.values(s.edges)) {
-      const a = s.nodes[e.from], b = s.nodes[e.to];
+      const a = D[e.from], b = D[e.to];
       if (!a || !b || !vis.has(a.layer) || !vis.has(b.layer)) continue;
       this.drawEdge(e, a, b, !rec && (jEdges ? !jEdges.has(e.id) : !this.store.inFocus(a.layer) && !this.store.inFocus(b.layer)), sel.has(e.id));
     }
@@ -558,7 +653,7 @@ export class DesignCanvas {
     ctx.lineWidth = 1.5 / z;
     ctx.strokeStyle = C.sel;
     ctx.setLineDash([]);
-    const selNodes = this.store.selectedNodes;
+    const selNodes = this.store.selectedNodes.map((n) => D[n.id] ?? n);
     for (const n of selNodes) {
       const p = 4 / z;
       ctx.strokeRect(n.x - p, n.y - p, n.w + 2 * p, n.h + 2 * p);
@@ -593,8 +688,8 @@ export class DesignCanvas {
       ctx.setLineDash([]);
     }
     if (d?.t === 'arrow') {
-      const a = s.nodes[d.from];
-      const b = d.over ? s.nodes[d.over] : null;
+      const a = D[d.from];
+      const b = d.over ? D[d.over] : null;
       let x2 = d.x, y2 = d.y;
       let [x1, y1] = [cxOf(a), cyOf(a)];
       if (b) [x1, y1, x2, y2] = edgeEnds(a, b);
@@ -613,14 +708,14 @@ export class DesignCanvas {
   private drawJourney(j: Journey, step: number, vis: Set<string>) {
     const { ctx } = this;
     const z = this.view.z;
-    const s = this.store.scene;
+    const s = this.store.scene, D = this.disp;
     const fwd = new Set<string>(), bwd = new Set<string>();
     for (const st of j.steps) (st.back ? bwd : fwd).add(st.edge);
     // segment of step k in walking order; request/response on one connection sit side by side
     const seg = (k: number): [number, number, number, number] | null => {
       const st = j.steps[k];
       const e = s.edges[st.edge];
-      const a = e && s.nodes[e.from], b = e && s.nodes[e.to];
+      const a = e && D[e.from], b = e && D[e.to];
       if (!a || !b || !vis.has(a.layer) || !vis.has(b.layer)) return null;
       let [x1, y1, x2, y2] = edgeEnds(a, b);
       if (st.back) [x1, y1, x2, y2] = [x2, y2, x1, y1];
@@ -683,7 +778,7 @@ export class DesignCanvas {
     // recording: pulsing ring on the box the next hop starts from
     const rec = this.store.recording;
     const head = rec?.id === j.id ? this.store.recordingHead : null;
-    const hn = head ? s.nodes[head] : null;
+    const hn = head ? D[head] : null;
     if (hn) {
       const pad = (6 + 3 * Math.sin(performance.now() / 180)) / z;
       ctx.globalAlpha = 1;
@@ -695,6 +790,34 @@ export class DesignCanvas {
     }
     ctx.globalAlpha = 1;
     if (j.steps.length || hn) this.invalidate(); // keep animating while a journey is on screen
+  }
+
+  /** A frame and title for each page, so side-by-side pages read as separate diagrams. */
+  private drawPages() {
+    const pages = pagesOf(this.store.scene);
+    if (pages.length < 2) return;
+    const { ctx } = this;
+    const z = this.view.z;
+    const open = this.store.activePage;
+    for (const p of pages) {
+      const r = this.pageRect(p.id);
+      if (!r) continue;
+      const on = p.id === open;
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = on ? 'rgba(110,168,255,0.035)' : 'rgba(255,255,255,0.015)';
+      ctx.strokeStyle = on ? 'rgba(110,168,255,0.45)' : 'rgba(139,147,167,0.28)';
+      ctx.lineWidth = 1.5 / z;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.roundRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, 24);
+      ctx.fill();
+      ctx.stroke();
+      ctx.font = `600 ${Math.max(16, 13 / z)}px Inter, ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillStyle = on ? C.sel : C.dim;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(p.name, r.x0 + 4, r.y0 - 8 / z);
+    }
   }
 
   private drawGrid() {

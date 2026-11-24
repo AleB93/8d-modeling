@@ -70,14 +70,14 @@ export default function App() {
     saveT = window.setTimeout(() => idbSet('scene', store.scene).catch(() => {}), 400);
   });
 
-  // opening another page in 2D frames it
+  // opening another page brings it on screen in 2D (all pages are drawn; no move if it's already visible)
   let lastPage = '';
   store.subscribe(() => {
     const p = store.activePage;
     if (p === lastPage) return;
     const first = !lastPage;
     lastPage = p;
-    if (!first && mode() === 'design' && design) queueMicrotask(() => design.fit());
+    if (!first && mode() === 'design' && design) queueMicrotask(() => design.revealPage(p));
   });
 
   const replaceScene = (s: Scene) => {
@@ -172,7 +172,7 @@ export default function App() {
     store.select([id]);
     if (mode() === 'play') viewer?.focusNode(id);
     else {
-      const n = store.scene.nodes[id];
+      const n = design.displayNode(id);
       if (n) design.setView({ cx: n.x + n.w / 2, cy: n.y + n.h / 2, width: Math.max(800, design.getView().width * 0.6) });
     }
   }
@@ -477,7 +477,7 @@ export default function App() {
       </header>
       <input ref={fileIn} type="file" accept=".json,application/json" hidden onChange={onFile} />
 
-      <LayersPanel ver={ver} toast={toastMsg} onPage={(id) => { if (mode() === 'play') viewer?.overview(900, id); else design.fit(); }} />
+      <LayersPanel ver={ver} toast={toastMsg} onPage={(id) => { if (mode() === 'play') viewer?.overview(900, id); else design.fit(id); }} />
       <SceneOutline ver={ver} open={outline()} close={() => setOutline(false)} focus={focusNode} showJourney={(id) => store.setJourney(id)} />
       <JourneysPanel ver={ver} toast={toastMsg} play={playJourney} playing={jPlaying} stopPlay={stopJourneyPlay} />
       <Show when={journeyOn()}>

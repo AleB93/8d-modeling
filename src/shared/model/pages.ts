@@ -1,7 +1,8 @@
 import { Layer, Page, Scene, SNode, uid } from './types';
 
 // Pages: independent diagrams in one scene. Each page owns a stack of floors (layers), and through them
-// its boxes. The 2D editor shows one page at a time; 3D lays every page out side by side on the ground.
+// its boxes. 2D and 3D both lay every page out side by side (pagePlacements); the "open" page is the
+// page of the active floor, where new floors and agent edits go.
 // Scenes saved before pages existed have no `pages`: they read as a single page holding every floor.
 
 export const DEFAULT_PAGE_ID = 'p_main';

@@ -211,11 +211,10 @@ export class Store {
     this.emit();
   }
 
-  /** True if a layer is drawn in the 2D editor: visible and on the open page. */
+  /** True if a layer is drawn in the 2D editor: every visible floor, on every page (pages sit side by side). */
   onCanvas(layerId: string) {
     if (!this.canvasLayers) {
-      const lp = layerPages(this.scene), page = this.activePage;
-      this.canvasLayers = new Set(this.scene.layers.filter((l) => l.visible && lp.get(l.id) === page).map((l) => l.id));
+      this.canvasLayers = new Set(this.scene.layers.filter((l) => l.visible).map((l) => l.id));
     }
     return this.canvasLayers.has(layerId);
   }

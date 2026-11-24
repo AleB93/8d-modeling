@@ -416,45 +416,42 @@ describe('hunt: openPage / onCanvas', () => {
     expect(st.onCanvas(top)).toBe(true);
   });
 
-  it('onCanvas follows the open page through openPage, setActiveLayer, undo and load', () => {
+  it('onCanvas shows every page whatever page is open, through openPage, setActiveLayer, undo and load', () => {
     const { st, p1, p2, ground, opsLayer } = twoPageStore();
-    expect(st.onCanvas(opsLayer)).toBe(false);
+    expect(st.onCanvas(opsLayer)).toBe(true);
     st.openPage(p2);
     expect(st.onCanvas(opsLayer)).toBe(true);
-    expect(st.onCanvas(ground)).toBe(false);
+    expect(st.onCanvas(ground)).toBe(true);
     st.setActiveLayer(ground);
     expect(st.onCanvas(ground)).toBe(true);
-    expect(st.onCanvas(opsLayer)).toBe(false);
-    st.focusLayer(opsLayer);
     expect(st.onCanvas(opsLayer)).toBe(true);
     st.undo(); // removes page 2 (the addPage update)
     expect(st.activePage).toBe(p1);
-    expect(st.onCanvas(opsLayer)).toBe(false);
+    expect(st.onCanvas(opsLayer)).toBe(false); // gone with its page
     expect(st.onCanvas(ground)).toBe(true);
     st.load(emptyScene());
     expect(st.onCanvas(ground)).toBe(false);
     expect(st.onCanvas(st.activeLayer)).toBe(true);
   });
 
-  it('onCanvas follows setJourney jumping to another page', () => {
+  it('onCanvas keeps both pages when a journey jumps to another page', () => {
     const { st, opsLayer, ground } = twoPageStore();
     const a = addNode(st, {}, opsLayer), b = addNode(st, {}, opsLayer);
     const e = makeEdge(a.id, b.id);
     st.update((s) => { s.edges[e.id] = e; s.journeys.push({ id: 'j', name: 'J', color: '#fff', steps: [{ edge: e.id }] }); });
-    expect(st.onCanvas(ground)).toBe(true);
     st.setJourney('j');
     expect(st.activeLayer).toBe(opsLayer);
     expect(st.onCanvas(opsLayer)).toBe(true);
-    expect(st.onCanvas(ground)).toBe(false);
+    expect(st.onCanvas(ground)).toBe(true);
   });
 
-  it('onCanvas follows select() switching to a node on another page', () => {
+  it('onCanvas hides a hidden floor on any page, open or not', () => {
     const { st, opsLayer, ground } = twoPageStore();
-    const c = addNode(st, {}, opsLayer);
+    st.update((s) => { s.layers.find((l) => l.id === opsLayer)!.visible = false; });
+    expect(st.onCanvas(opsLayer)).toBe(false);
+    st.select([addNode(st, {}, opsLayer).id]); // a box on the hidden floor's page opens that page
+    expect(st.onCanvas(opsLayer)).toBe(false);
     expect(st.onCanvas(ground)).toBe(true);
-    st.select([c.id]);
-    expect(st.onCanvas(opsLayer)).toBe(true);
-    expect(st.onCanvas(ground)).toBe(false);
   });
 
   it('onCanvas is false for unknown layers', () => {
@@ -648,7 +645,7 @@ describe('hunt: random operation sequences keep invariants', () => {
     const pageIds = new Set(pagesOf(s).map((p) => p.id));
     for (const p of lp.values()) expect(pageIds.has(p)).toBe(true);
     // the onCanvas cache agrees with a fresh computation
-    for (const l of s.layers) expect(st.onCanvas(l.id)).toBe(l.visible && lp.get(l.id) === st.activePage);
+    for (const l of s.layers) expect(st.onCanvas(l.id)).toBe(l.visible && lp.has(l.id));
   }
 
   let lastOp = -1;

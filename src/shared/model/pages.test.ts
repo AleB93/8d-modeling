@@ -117,19 +117,19 @@ describe('store pages', () => {
     expect(st.activePage).toBe(page.id);
   });
 
-  it('draws only visible floors of the open page in 2D', () => {
+  it('draws the visible floors of every page in 2D, not just the open one', () => {
     const { s, ground, layer } = twoPages();
     const st = new Store();
     st.load(s);
     st.setActiveLayer(ground.id);
     expect(st.onCanvas(ground.id)).toBe(true);
     expect(st.onCanvas('l_top')).toBe(true);
-    expect(st.onCanvas(layer.id)).toBe(false);
+    expect(st.onCanvas(layer.id)).toBe(true);
     st.update((sc) => { sc.layers.find((l) => l.id === 'l_top')!.visible = false; });
     expect(st.onCanvas('l_top')).toBe(false);
     st.setActiveLayer(layer.id);
     expect(st.onCanvas(layer.id)).toBe(true);
-    expect(st.onCanvas(ground.id)).toBe(false);
+    expect(st.onCanvas(ground.id)).toBe(true);
   });
 
   it('showing a journey opens its page', () => {
