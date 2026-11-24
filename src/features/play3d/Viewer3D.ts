@@ -13,7 +13,7 @@ export const S = WORLD_SCALE;
 const LAYER_GAP = FLOOR_GAP; // world px between floors
 const GROUND_Y = -0.3;
 const TILE_H = 0.2;
-const TILE_Y = -0.02 - TILE_H / 2; // top face at -0.02
+const TILE_Y = -0.05 - TILE_H / 2; // top face at -0.05, clear of zones (bottom at -0.015)
 const SEG = 24; // samples per edge curve
 const MAX_PARTICLES = 30000;
 const SLOTS = 60; // particle slots per edge
@@ -232,7 +232,8 @@ export class Viewer3D {
     this.scene.add(sun, sun.target);
     this.sun = sun;
 
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1 }));
+    // polygonOffset pushes the ground behind the grid lines drawn just above it, so they never fight
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }));
     ground.rotation.x = -Math.PI / 2;
     // the ground sits well below everything else (page tiles, boxes): surfaces a few hundredths apart
     // z-fight once the camera is far away, which made page tiles vanish when zooming out
@@ -241,6 +242,7 @@ export class Viewer3D {
     const grid = new THREE.GridHelper(3000, 1500, '#252c3a', '#171c26');
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.7;
+    (grid.material as THREE.Material).depthWrite = false;
     grid.position.y = GROUND_Y + 0.01;
     this.scene.add(ground, grid);
 
@@ -376,8 +378,12 @@ export class Viewer3D {
     fog.near = dist * 1.3 + 20;
     fog.far = dist * 4 + 120;
     const far = Math.max(1000, dist * 8);
-    if (this.camera.far !== far) {
+    // the near plane follows the zoom too: kept at 0.1 while far away, depth precision collapses and
+    // surfaces a few hundredths apart (ground, grid, page tiles, zones) flicker as they fight
+    const near = Math.min(5, Math.max(0.1, dist * 0.02));
+    if (this.camera.far !== far || this.camera.near !== near) {
       this.camera.far = far;
+      this.camera.near = near;
       this.camera.updateProjectionMatrix();
     }
   }
@@ -736,7 +742,9 @@ export class Viewer3D {
     if (pagesOf(sc).length > 1) {
       for (const pg of pagesOf(sc)) {
         const p = this.placements.get(pg.id)!;
-        put('P:' + pg.id, pg.name, '', '#f5f7fb', (p.x0 + p.dx - 120) * S + 2, 0.05, (p.y0 - 170) * S, 1.6, true);
+        // on the ground at the page's front edge (the side the camera looks from), so it never lands
+        // behind the stacked floors on top of their labels
+        put('P:' + pg.id, pg.name, '', '#f5f7fb', (p.x0 + p.dx - 120) * S + 2, 0.05, (p.y1 + 200) * S, 1.6, true);
       }
     }
     // journey step labels sit on their connection, a little toward the step's start

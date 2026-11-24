@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
 import { store } from '../../shared/appStore';
 import { addPage, deletePage, ensurePages, layerPages, pagesOf } from '../../shared/model/pages';
 import { Layer, uid } from '../../shared/model/types';
@@ -23,6 +23,14 @@ export function LayersPanel(props: { ver: () => number; toast: (m: string) => vo
   const page = createMemo(() => (props.ver(), store.activePage));
   const active = createMemo(() => (props.ver(), store.activeLayer));
   const all = createMemo(() => (props.ver(), store.allLayers));
+  let host: HTMLElement | undefined;
+  // a page can open from elsewhere (a tour stop, a journey, leaving 3D): bring its folder into view
+  createEffect(on(page, (id) => queueMicrotask(() => {
+    const row = host?.querySelector<HTMLElement>(`[data-page="${CSS.escape(id)}"]`);
+    if (!row || !host) return;
+    const r = row.getBoundingClientRect(), b = host.getBoundingClientRect();
+    if (r.top < b.top || r.bottom > b.bottom) host.scrollTop += r.top - b.top - 40; // below the header
+  }), { defer: true }));
   const [renaming, setRenaming] = createSignal<string | null>(null);
   const [closed, setClosed] = createSignal<Set<string>>(new Set());
   const isOpen = (id: string) => id === page() || !closed().has(id);
@@ -90,7 +98,7 @@ export function LayersPanel(props: { ver: () => number; toast: (m: string) => vo
   );
 
   return (
-    <aside class="layers panel">
+    <aside class="layers panel" ref={host}>
       <h3>
         <Icon name="layers" size={16} /> Layers
         <button class="icon sm" title="New page: a separate diagram, shown next to the others in 3D" onClick={newPage}><Icon name="folderPlus" size={16} /></button>
@@ -104,7 +112,7 @@ export function LayersPanel(props: { ver: () => number; toast: (m: string) => vo
       <For each={tree()}>
         {(t) => (
           <div class="page" classList={{ open: isOpen(t.p.id) }}>
-            <div class="layer folder" classList={{ current: page() === t.p.id }}
+            <div class="layer folder" classList={{ current: page() === t.p.id }} data-page={t.p.id}
               title={page() === t.p.id ? 'Show this page' : 'Open this page'} onClick={() => { store.openPage(t.p.id); props.onPage?.(t.p.id); }}>
               <button class="icon sm" title={isOpen(t.p.id) ? 'Collapse' : 'Expand'} disabled={page() === t.p.id}
                 onClick={(e) => { e.stopPropagation(); toggle(t.p.id); }}>

@@ -119,10 +119,10 @@ scene.add(new THREE.HemisphereLight('#cfd8ff', '#1a1d26', 1.1));
 const sun = new THREE.DirectionalLight('#ffffff', 2.4);
 sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.02; sun.shadow.intensity = 0.45;
 scene.add(sun, sun.target);
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1 }));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(3000, 3000), new THREE.MeshStandardMaterial({ color: '#10141c', roughness: 1, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }));
 ground.rotation.x = -Math.PI / 2; ground.position.y = -0.02; ground.receiveShadow = true;
 const grid = new THREE.GridHelper(3000, 1500, '#252c3a', '#171c26');
-grid.material.transparent = true; grid.material.opacity = 0.7;
+grid.material.transparent = true; grid.material.opacity = 0.7; grid.material.depthWrite = false;
 scene.add(ground, grid);
 
 function unitGeo(kind) {
@@ -397,6 +397,12 @@ function frame(t) {
     if (k >= 1) tw = null;
   }
   controls.update();
+  { // near/far and fog follow the zoom, so far-away surfaces keep enough depth precision not to flicker
+    const d = camera.position.distanceTo(controls.target);
+    const near = Math.min(5, Math.max(0.1, d * 0.02)), far = Math.max(1000, d * 8);
+    if (camera.near !== near || camera.far !== far) { camera.near = near; camera.far = far; camera.updateProjectionMatrix(); }
+    scene.fog.near = d * 1.3 + 20; scene.fog.far = d * 4 + 120;
+  }
   if (jv) moveToken(t);
   if (flowsOn && !jv) for (const e of edgeObjs) {
     if (!e.pts.visible) continue;

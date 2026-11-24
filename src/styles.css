@@ -73,6 +73,8 @@ input, select, textarea { font: inherit; color: var(--text); }
 /* ---------- side panels ---------- */
 .layers, .tour { position: absolute; left: 12px; width: 220px; padding: 10px; }
 .layers { top: 70px; max-height: 40vh; overflow: auto; }
+/* the header (with New page / Add floor) stays put while the list scrolls */
+.layers > h3 { position: sticky; top: -10px; z-index: 2; margin: -10px -10px 4px; padding: 10px 10px 6px; background: rgb(22, 26, 35); border-radius: var(--radius) var(--radius) 0 0; }
 .tour { bottom: 64px; max-height: 38vh; overflow: auto; }
 .inspector { position: absolute; right: 12px; top: 70px; width: 260px; padding: 12px; max-height: calc(100vh - 106px - var(--jh, 0px)); overflow: auto; display: flex; flex-direction: column; gap: 10px; }
 h3 { margin: 0 0 4px; font-size: 13px; font-weight: 650; display: flex; align-items: center; gap: 7px; }
