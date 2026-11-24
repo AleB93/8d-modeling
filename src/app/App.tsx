@@ -17,6 +17,8 @@ import { AgentPill } from '../features/agent/AgentPill';
 import { installPageApi } from '../features/agent/pageApi';
 import { WebMCPHint } from '../features/agent/WebMCPHint';
 import { About } from '../features/about/About';
+import { ShareDialog } from '../features/share/ShareDialog';
+import { copyText } from '../features/share/copyText';
 import { Help } from '../features/help/Help';
 import { LabelEditor } from '../features/design/LabelEditor';
 import { Inspector } from '../features/inspector/Inspector';
@@ -45,6 +47,7 @@ export default function App() {
   const [menu, setMenu] = createSignal(false);
   const [help, setHelp] = createSignal(false);
   const [about, setAbout] = createSignal(false);
+  const [shareLink, setShareLink] = createSignal<{ url: string; title: string } | null>(null);
   const [agentHint, setAgentHint] = createSignal(false);
   const [outline, setOutline] = createSignal(false);
   const [toast, setToastMsg] = createSignal('');
@@ -333,7 +336,7 @@ export default function App() {
     if (e.key.toLowerCase() === 'o' && !(e.metaKey || e.ctrlKey || e.altKey)) { setOutline((v) => !v); return; }
     if (e.key === 'Escape' && outline()) { setOutline(false); return; }
     if (e.key === 'Escape' && agentHint()) { markWebMCPHintSeen(); setAgentHint(false); return; }
-    if (e.key === 'Escape' && (help() || menu() || about())) { setHelp(false); setMenu(false); setAbout(false); return; }
+    if (e.key === 'Escape' && (help() || menu() || about() || shareLink())) { setHelp(false); setMenu(false); setAbout(false); setShareLink(null); return; }
     if (e.key === 'Escape' && store.recording) { store.stopRecording(); toastMsg('Recording finished'); return; }
     if (store.journey && !(e.metaKey || e.ctrlKey)) {
       if (e.key === '[' || e.key === ']') { stepJourney(e.key === ']' ? 1 : -1); return; }
@@ -395,13 +398,16 @@ export default function App() {
       download('system-2d.png', b);
       return 'system-2d.png';
     },
+    // Copy the link; where the host blocks the clipboard (embedded browsers, webviews), show it in
+    // the page's own dialog. Never window.prompt(): those hosts block it too.
     share: async (withView: boolean) => {
-      const url = shareUrl(store.scene, withView ? captureView() : undefined);
+      const title = withView ? 'Share link with current view' : 'Share link (scene only)';
       try {
-        await navigator.clipboard.writeText(url);
-        toastMsg(`${withView ? 'Share link with current view' : 'Share link (scene only)'} copied (${(url.length / 1024).toFixed(1)} KB)`);
-      } catch {
-        prompt('Copy this link', url);
+        const url = shareUrl(store.scene, withView ? captureView() : undefined);
+        if (await copyText(url)) toastMsg(`${title} copied (${(url.length / 1024).toFixed(1)} KB)`);
+        else setShareLink({ url, title });
+      } catch (err) {
+        toastMsg(`Could not create the share link: ${(err as Error).message}`);
       }
     },
   };
@@ -527,6 +533,7 @@ export default function App() {
 
       <Show when={help()}><Help close={() => setHelp(false)} /></Show>
       <Show when={about()}><About close={() => setAbout(false)} /></Show>
+      <Show when={shareLink()}>{(l) => <ShareDialog url={l().url} title={l().title} close={() => setShareLink(null)} />}</Show>
       <Show when={agentHint()}><WebMCPHint close={() => { markWebMCPHintSeen(); setAgentHint(false); }} toast={toastMsg} /></Show>
       <Show when={toast()}><div class="toast">{toast()}</div></Show>
     </div>

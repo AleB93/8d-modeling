@@ -217,6 +217,12 @@ button.jdot { cursor: pointer; margin: 0 6px; }
 button.brand { background: none; border: 0; cursor: pointer; font-family: inherit; }
 button.brand:hover { filter: brightness(1.15); }
 .about { width: min(520px, 92vw); padding: 18px 20px; line-height: 1.5; }
+.share-dialog { width: min(560px, 92vw); padding: 16px 18px; }
+.share-dialog h3 { display: flex; justify-content: space-between; align-items: center; margin: 0 0 6px; }
+.share-row { display: flex; gap: 8px; margin: 8px 0; }
+.share-row input { flex: 1; min-width: 0; font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.share-row .btn.primary { width: auto; margin-top: 0; padding: 0 16px; }
+.share-dialog .fine { margin: 4px 0; font-size: 12px; opacity: 0.7; }
 .about h3 { display: flex; justify-content: space-between; align-items: center; margin: 0 0 10px; }
 .about-title { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 18px; }
 .about h4 { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.6px; opacity: 0.7; }
